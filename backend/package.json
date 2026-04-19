@@ -16,6 +16,7 @@
   },
   "private": "true",
   "dependencies": {
+    "@prisma/client": "^7.7.0",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
@@ -30,6 +31,7 @@
     "eslint": "^10.2.1",
     "nodemon": "^3.1.14",
     "prettier": "^3.8.3",
+    "prisma": "^7.7.0",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3"
   }
