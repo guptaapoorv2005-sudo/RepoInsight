@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import helmet from "helmet";
 import { env } from "./config/env.js";
+import { prisma } from "./lib/prisma.js";
 
 const app = express();
 
@@ -16,6 +17,23 @@ app.get("/api/health", (_req, res) => {
     environment: env.NODE_ENV,
     timestamp: new Date().toISOString()
   });
+});
+
+app.get("/api/ready", async (_req, res) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    res.status(200).json({
+      ready: true,
+      database: "connected",
+      timestamp: new Date().toISOString()
+    });
+  } catch {
+    res.status(503).json({
+      ready: false,
+      database: "unreachable",
+      timestamp: new Date().toISOString()
+    });
+  }
 });
 
 export default app;
