@@ -12,11 +12,16 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src --ext .ts"
+    "lint": "eslint src --ext .ts",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:deploy": "prisma migrate deploy",
+    "prisma:status": "prisma migrate status",
+    "smoke:vector": "tsx src/scripts/vector-smoke-test.ts"
   },
   "private": "true",
   "dependencies": {
-    "@prisma/client": "^7.7.0",
+    "@prisma/client": "^6.19.0",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
@@ -31,7 +36,7 @@
     "eslint": "^10.2.1",
     "nodemon": "^3.1.14",
     "prettier": "^3.8.3",
-    "prisma": "^7.7.0",
+    "prisma": "^6.19.0",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3"
   }
