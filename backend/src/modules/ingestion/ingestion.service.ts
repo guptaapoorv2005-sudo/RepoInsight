@@ -3,8 +3,15 @@ import { env } from "../../config/env.js";
 import type {
     ScanRepositoryInput,
     ScanRepositoryResult,
-    ScannedFile
+    ScannedFile,
+    FetchAndChunkInput,
+    FetchAndChunkResult,
+    FileChunk,
+    IngestRepositoryInput,
+    IngestRepositoryResult
 } from "./ingestion.types.js";
+import { indexRepository } from "../indexing/indexing.service.js";
+import type { IndexChunkInput } from "../indexing/indexing.types.js";
 
 type GitHubRepoResponse = {
     default_branch: string;
@@ -21,8 +28,19 @@ type GitHubTreeResponse = {
     tree: GitHubTreeNode[];
 };
 
+type GitHubContentResponse = {
+    type: "file" | "dir" | "symlink" | "submodule";
+    encoding?: string;
+    size?: number;
+    content?: string;
+};
+
 const DEFAULT_MAX_FILES = 300;
 const DEFAULT_MAX_FILE_SIZE_BYTES = 200_000;
+const DEFAULT_CHUNK_SIZE_LINES = 80;
+const DEFAULT_CHUNK_OVERLAP_LINES = 10;
+const DEFAULT_MAX_FETCH_FILES = 100;
+const DEFAULT_MAX_FETCH_FILE_SIZE_BYTES = 200_000;
 
 const BLOCKED_DIR_PREFIXES = [
     ".git/",
@@ -180,8 +198,7 @@ export async function scanRepository(input: ScanRepositoryInput): Promise<ScanRe
     files: keptFiles
     };
 }
-
-//TODO:
+//TODO for scanRepository:
 
 // 1. Truncated tree ignored
 // Large repos:
@@ -198,3 +215,253 @@ export async function scanRepository(input: ScanRepositoryInput): Promise<ScanRe
 // All files treated equally
 // Better:
 // prioritize /src, /lib
+
+function encodeGitHubPath(path: string): string {
+    // if the file path contains special characters or spaces, encodeURIComponent will encode them. However, it will also encode "/" which we want to keep as it is for GitHub API. So we split the path by "/", encode each part, and then join them back with "/".
+    return path.split("/").map((part) => encodeURIComponent(part)).join("/");
+}
+
+function toLines(text: string): string[] {
+    //This function normalizes line endings to "\n" and then splits the text into lines. This way, it can handle files with different line ending styles (Windows uses "\r\n", Unix uses "\n", old Mac used "\r").
+    return text.replace(/\r\n/g, "\n").split("\n");
+}
+
+function isProbablyBinary(text: string): boolean {
+    //This function checks if the text is likely to be binary by looking for null bytes. Binary files often contain null bytes, while text files typically do not. This is a heuristic and not foolproof, but it can help catch cases where a file is not actually text.
+    return text.includes("\u0000");
+}
+
+function chunkTextByLines( //TODO: AST-based or token-based chunking 
+  filePath: string,
+  text: string,
+  chunkSizeLines: number,
+  overlapLines: number
+): FileChunk[] {
+  const lines = toLines(text);
+  const chunks: FileChunk[] = [];
+
+  if (lines.length === 0) return chunks;
+
+  const step = chunkSizeLines - overlapLines; // This is how many new lines we move forward for each chunk. 
+  // For example, if chunkSizeLines is 80 and overlapLines is 10, then step will be 70. 
+  // This means that each chunk will start 70 lines after the previous chunk's start, resulting in a 10-line overlap between consecutive chunks.
+  // We make overlap to preserve some context between chunks, which can be helpful for downstream processing that may need to understand the relationship between lines.
+
+  for (let start = 0, chunkIndex = 0; start < lines.length; start += step, chunkIndex += 1) {
+    const endExclusive = Math.min(start + chunkSizeLines, lines.length);
+    const content = lines.slice(start, endExclusive).join("\n"); //We join the lines back together with "\n" to reconstruct the chunk's text content.
+
+    chunks.push({
+      filePath,
+      chunkIndex,
+      startLine: start + 1,
+      endLine: endExclusive,
+      content,
+      charCount: content.length
+    });
+
+    if (endExclusive >= lines.length) break;
+  }
+
+  return chunks;
+}
+
+async function fetchFileContentFromGitHub( //TODO: add caching layer to avoid refetching the same file and timeout+retry logic for large files that may take a long time to fetch and decode.
+  owner: string,
+  repo: string,
+  branch: string,
+  filePath: string
+): Promise<string> {
+  const encodedPath = encodeGitHubPath(filePath);
+
+  const payload = await githubGet<GitHubContentResponse>(
+    "https://api.github.com/repos/" +
+      owner +
+      "/" +
+      repo +
+      "/contents/" +
+      encodedPath +
+      "?ref=" +
+      encodeURIComponent(branch)
+  );
+
+  if (payload.type !== "file") {
+    throw new ApiError(400, "Path is not a file");
+  }
+
+  if (payload.encoding !== "base64" || !payload.content) { // GitHub API returns file content in base64 encoding.
+    throw new ApiError(400, "Unsupported GitHub content encoding");
+  }
+
+  const decoded = Buffer.from(payload.content.replace(/\n/g, ""), "base64").toString("utf8");
+
+  if (isProbablyBinary(decoded)) {
+    throw new ApiError(400, "Binary file detected");
+  }
+
+  return decoded;
+}
+
+export async function fetchAndChunkFiles(
+  input: FetchAndChunkInput
+): Promise<FetchAndChunkResult> {
+  if (!input.owner || !input.repo || !input.branch) {
+    throw new ApiError(400, "owner, repo, and branch are required");
+  }
+
+  if (!Array.isArray(input.files) || input.files.length === 0) {
+    throw new ApiError(400, "files must be a non-empty array");
+  }
+
+  const chunkSizeLines = input.chunkSizeLines ?? DEFAULT_CHUNK_SIZE_LINES;
+  const overlapLines = input.overlapLines ?? DEFAULT_CHUNK_OVERLAP_LINES;
+  const maxFilesToFetch = input.maxFilesToFetch ?? DEFAULT_MAX_FETCH_FILES;
+  const maxFileSizeBytes = input.maxFileSizeBytes ?? DEFAULT_MAX_FETCH_FILE_SIZE_BYTES;
+
+  if (chunkSizeLines <= 0) {
+    throw new ApiError(400, "chunkSizeLines must be greater than 0");
+  }
+
+  if (overlapLines < 0 || overlapLines >= chunkSizeLines) {
+    throw new ApiError(400, "overlapLines must be >= 0 and less than chunkSizeLines");
+  }
+
+  const selectedFiles = input.files.slice(0, maxFilesToFetch);
+
+  const chunks: FileChunk[] = [];
+  const errors: Array<{ filePath: string; reason: string }> = [];
+  let processedFiles = 0;
+  let skippedFiles = 0;
+
+  for (const file of selectedFiles) {  //TODO: parallelize fetching and chunking by using Promise.all with a concurrency limit to speed up processing of multiple files, especially for large repositories. We can use a library like p-limit to control the concurrency and avoid overwhelming the GitHub API or our server resources.
+    if (file.size !== null && file.size > maxFileSizeBytes) {
+      skippedFiles += 1;
+      errors.push({
+        filePath: file.path,
+        reason: "File exceeds maxFileSizeBytes"
+      });
+      continue;
+    }
+
+    try {
+      const text = await fetchFileContentFromGitHub(
+        input.owner,
+        input.repo,
+        input.branch,
+        file.path
+      );
+
+      const fileChunks = chunkTextByLines(
+        file.path,
+        text,
+        chunkSizeLines,
+        overlapLines
+      );
+
+      chunks.push(...fileChunks);
+      processedFiles += 1;
+    } catch (error) {
+      skippedFiles += 1;
+      errors.push({
+        filePath: file.path,
+        reason: error instanceof Error ? error.message : "Unknown fetch/chunk error"
+      });
+    }
+  }
+
+  return {
+    owner: input.owner,
+    repo: input.repo,
+    branch: input.branch,
+    requestedFiles: selectedFiles.length,
+    processedFiles,
+    skippedFiles,
+    totalChunks: chunks.length,
+    chunks,
+    errors
+  };
+}
+
+function mapChunksForIndexing(chunks: FileChunk[]): IndexChunkInput[] {
+  return chunks.map((chunk) => ({
+    filePath: chunk.filePath,
+    chunkIndex: chunk.chunkIndex,
+    content: chunk.content,
+    tokenCount: null,
+    metadata: {
+      startLine: chunk.startLine,
+      endLine: chunk.endLine,
+      charCount: chunk.charCount,
+      source: "github"
+    }
+  }));
+}
+
+export async function ingestRepositoryToDb( input: IngestRepositoryInput ): Promise<IngestRepositoryResult> {
+  if (!input.repoUrl) {
+    throw new ApiError(400, "repoUrl is required");
+  }
+
+  const scanResult = await scanRepository({
+    repoUrl: input.repoUrl,
+    branch: input.branch,
+    maxFiles: input.scanMaxFiles,
+    maxFileSizeBytes: input.scanMaxFileSizeBytes
+  });
+
+  const fetchResult = await fetchAndChunkFiles({
+    owner: scanResult.owner,
+    repo: scanResult.repo,
+    branch: scanResult.branch,
+    files: scanResult.files.map((file) => ({
+      path: file.path,
+      size: file.size
+    })),
+    chunkSizeLines: input.chunkSizeLines,
+    overlapLines: input.overlapLines,
+    maxFilesToFetch: input.fetchMaxFiles ?? scanResult.files.length,
+    maxFileSizeBytes: input.fetchMaxFileSizeBytes ?? input.scanMaxFileSizeBytes
+  });
+
+  if (fetchResult.totalChunks === 0) {
+    throw new ApiError(400, "No chunks generated to persist");
+  }
+
+  const persistResult = await indexRepository({
+    owner: scanResult.owner,
+    name: scanResult.repo,
+    defaultBranch: scanResult.branch,
+    chunks: mapChunksForIndexing(fetchResult.chunks)
+  });
+
+  return {
+    owner: scanResult.owner,
+    repo: scanResult.repo,
+    branch: scanResult.branch,
+    scan: {
+      totalFromTree: scanResult.totalFromTree,
+      kept: scanResult.kept,
+      skipped: scanResult.skipped
+    },
+    chunking: {
+      requestedFiles: fetchResult.requestedFiles,
+      processedFiles: fetchResult.processedFiles,
+      skippedFiles: fetchResult.skippedFiles,
+      totalChunks: fetchResult.totalChunks,
+      errors: fetchResult.errors
+    },
+    persistence: {
+      repositoryId: persistResult.repositoryId,
+      totalChunks: persistResult.totalChunks,
+      embeddedChunks: persistResult.embeddedChunks
+    }
+  };
+}
+
+//TODO for ingestRepositoryToDb:
+//1. Add token counting
+//2. Language detection and store as metadata
+//3. Add chunk id to enable deduplication and updates in the future
+//4. Add retry logic for transient errors during fetching and indexing
+//5. Add concurrency control by p-limit
+//6. Batch indexing instead of one by one to optimize database operations and embedding generation
