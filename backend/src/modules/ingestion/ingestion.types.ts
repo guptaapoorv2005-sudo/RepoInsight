@@ -26,8 +26,8 @@ export type FetchAndChunkInput = {
   repo: string;
   branch: string;
   files: Array<{ path: string; size: number | null }>;
-  chunkSizeLines?: number;
-  overlapLines?: number;
+  chunkSizeTokens?: number;
+  overlapTokens?: number;
   maxFilesToFetch?: number;
   maxFileSizeBytes?: number;
 };
@@ -35,10 +35,10 @@ export type FetchAndChunkInput = {
 export type FileChunk = {
   filePath: string;
   chunkIndex: number;
-  startLine: number;
-  endLine: number;
   content: string;
   charCount: number;
+  language: string;
+  tokenCount: number;
 };
 
 export type FetchAndChunkResult = {
@@ -58,8 +58,8 @@ export type IngestRepositoryInput = {
   branch?: string;
   scanMaxFiles?: number;
   scanMaxFileSizeBytes?: number;
-  chunkSizeLines?: number;
-  overlapLines?: number;
+  chunkSizeTokens?: number;
+  overlapTokens?: number;
   fetchMaxFiles?: number;
   fetchMaxFileSizeBytes?: number;
 };

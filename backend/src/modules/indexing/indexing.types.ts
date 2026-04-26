@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 
 export type IndexChunkInput = {
+  id: string;
   filePath: string;
   chunkIndex: number;
   content: string;

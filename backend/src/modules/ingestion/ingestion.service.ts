@@ -12,6 +12,9 @@ import type {
 } from "./ingestion.types.js";
 import { indexRepository } from "../indexing/indexing.service.js";
 import type { IndexChunkInput } from "../indexing/indexing.types.js";
+import pLimit from "p-limit";
+import crypto from "crypto";
+import { encode, decode } from "gpt-tokenizer";
 
 type GitHubRepoResponse = {
     default_branch: string;
@@ -35,10 +38,15 @@ type GitHubContentResponse = {
     content?: string;
 };
 
+type FetchResult =
+  | { type: "success"; fileChunks: FileChunk[] }
+  | { type: "skipped"; filePath: string; reason: string }
+  | { type: "error"; filePath: string; reason: string };
+
 const DEFAULT_MAX_FILES = 300;
 const DEFAULT_MAX_FILE_SIZE_BYTES = 200_000;
-const DEFAULT_CHUNK_SIZE_LINES = 80;
-const DEFAULT_CHUNK_OVERLAP_LINES = 10;
+const DEFAULT_CHUNK_SIZE_TOKENS = 350;
+const DEFAULT_CHUNK_OVERLAP_TOKENS = 60;
 const DEFAULT_MAX_FETCH_FILES = 100;
 const DEFAULT_MAX_FETCH_FILE_SIZE_BYTES = 200_000;
 
@@ -61,6 +69,41 @@ const ALLOWED_EXTENSIONS = new Set([
     ".h", ".hpp", ".swift", ".sql", ".yaml", ".yml",
     ".toml", ".sh"
 ]);
+
+const SPECIAL_FILES = new Set([
+  "Dockerfile",
+  "Makefile",
+  "README",
+  "README.md",
+  "LICENSE"
+]);
+
+const EXTENSION_LANGUAGE_MAP: Record<string, string> = {
+  ".ts": "typescript",
+  ".tsx": "typescript",
+  ".js": "javascript",
+  ".jsx": "javascript",
+  ".py": "python",
+  ".go": "go",
+  ".rs": "rust",
+  ".java": "java",
+  ".kt": "kotlin",
+  ".rb": "ruby",
+  ".php": "php",
+  ".cs": "csharp",
+  ".cpp": "cpp",
+  ".c": "c",
+  ".h": "c",
+  ".hpp": "cpp",
+  ".swift": "swift",
+  ".sql": "sql",
+  ".json": "json",
+  ".yaml": "yaml",
+  ".yml": "yaml",
+  ".md": "markdown",
+  ".sh": "bash",
+  ".toml": "toml"
+};
 
 function parseGitHubUrl(repoUrl: string): { owner: string; repo: string } {
     let parsed: URL;
@@ -116,6 +159,30 @@ async function githubGet<T>(url: string): Promise<T> { //<T> is a generic type p
     return (await response.json()) as T; //response.json() parses the response body as JSON and returns it.
 }
 
+async function githubGetWithRetry<T>(url: string, retries = 3): Promise<T> {
+  let lastError;
+
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      return await githubGet<T>(url);
+    } catch (err) {
+      lastError = err;
+
+      if (err instanceof ApiError) {
+        if (err.statusCode === 400 || err.statusCode === 404) {
+          throw err;
+        }
+      }
+
+      // exponential backoff
+      // If we hit a rate limit, we can retry after some delay. GitHub's rate limit resets every hour, but we can use exponential backoff to wait longer between retries.
+      await new Promise((r) => setTimeout(r, 500 * Math.pow(2, attempt)));
+    }
+  }
+
+  throw lastError;
+}
+
 function extensionOf(path: string): string {
     const index = path.lastIndexOf("."); //Finds last occurrence of "." in the string. If there is no ".", it returns -1.
     if (index === -1) return "";
@@ -129,12 +196,38 @@ function isBlockedByDirectory(path: string): boolean { //Checks if the file path
 function shouldKeep(path: string, size: number | null, maxFileSizeBytes: number): boolean {
     if (isBlockedByDirectory(path)) return false;
 
+    const fileName = path.split("/").pop() || "";
+
+    if (SPECIAL_FILES.has(fileName)) return true;
+
     const ext = extensionOf(path);
     if (!ALLOWED_EXTENSIONS.has(ext)) return false; //ALLOWED_EXTENSIONS is a Set, O(1) lookup.
 
     if (size !== null && size > maxFileSizeBytes) return false;
 
     return true;
+}
+
+//Since we may encounter repositories with a large number of files, we need to prioritize which files to keep when we reach the maxFiles limit.
+function scoreFile(path: string): number {
+  let score = 0;
+
+  // prioritize important dirs
+  if (path.startsWith("src/")) score += 5;
+  if (path.startsWith("app/")) score += 5;
+  if (path.startsWith("prisma/")) score += 5;
+  if (path.startsWith("lib/")) score += 4;
+  if (path.startsWith("components/")) score += 4;
+
+  // deprioritize noise
+  if (path.includes("test") || path.includes("__tests__")) score -= 3;
+  if (path.includes(".lock")) score -= 5;
+
+  // important standalone files
+  if (path.endsWith("package.json")) score += 6;
+  if (path.toLowerCase().includes("readme")) score += 6;
+
+  return score;
 }
 
 export async function scanRepository(input: ScanRepositoryInput): Promise<ScanRepositoryResult> {
@@ -154,11 +247,11 @@ export async function scanRepository(input: ScanRepositoryInput): Promise<ScanRe
 
     const { owner, repo } = parseGitHubUrl(input.repoUrl);
 
-    const repoMeta = await githubGet<GitHubRepoResponse>("https://api.github.com/repos/" + owner + "/" + repo); //this returns repositeries default branch and other metadata. We need the default branch to know which branch to scan if the user did not specify one.
+    const repoMeta = await githubGetWithRetry<GitHubRepoResponse>("https://api.github.com/repos/" + owner + "/" + repo); //this returns repositeries default branch and other metadata. We need the default branch to know which branch to scan if the user did not specify one.
 
     const branch = input.branch ?? repoMeta.default_branch;
 
-    const treeResponse = await githubGet<GitHubTreeResponse>( //Gets file structure of the repository at the specified branch. 
+    const treeResponse = await githubGetWithRetry<GitHubTreeResponse>( //Gets file structure of the repository at the specified branch. 
         "https://api.github.com/repos/" +
         owner +
         "/" +
@@ -168,62 +261,46 @@ export async function scanRepository(input: ScanRepositoryInput): Promise<ScanRe
         "?recursive=1"     //The "?recursive=1" query parameter tells GitHub to return the entire file tree recursively, not just the top-level files and directories.
     );
 
+    if (treeResponse.truncated) {
+      throw new ApiError(400,"Repository too large (truncated tree). Use smaller repo or implement pagination.");
+    }
+
     const blobs = treeResponse.tree.filter((node) => node.type === "blob"); //We only care about blobs, which represent files. We ignore "tree" (directories) and "commit" (submodules).
 
-    const keptFiles: ScannedFile[] = [];
-    let skipped = 0;
+    // Filter first
+    const filtered = blobs
+      .map((node) => ({
+        path: node.path,
+        size: typeof node.size === "number" ? node.size : null,
+      }))
+      .filter((file) => shouldKeep(file.path, file.size, maxFileSizeBytes));
 
-    for (const node of blobs) {
-        const size = typeof node.size === "number" ? node.size : null;
-        if (!shouldKeep(node.path, size, maxFileSizeBytes)) {
-            skipped += 1;
-            continue;
-        }
+    // Score + sort
+    const sorted = filtered.sort((a, b) => scoreFile(b.path) - scoreFile(a.path));
 
-        keptFiles.push({
-            path: node.path,
-            size,
-            extension: extensionOf(node.path)
-        });
+    // Take top N
+    const selected = sorted.slice(0, maxFiles);
 
-        if (keptFiles.length >= maxFiles)break;
-    }
+    const keptFiles: ScannedFile[] = selected.map((file) => ({
+      path: file.path,
+      size: file.size,
+      extension: extensionOf(file.path),
+    }));
+
     return {
-    owner,
-    repo,
-    branch,
-    totalFromTree: blobs.length,
-    kept: keptFiles.length,
-    skipped,
-    files: keptFiles
+      owner,
+      repo,
+      branch,
+      totalFromTree: blobs.length,
+      kept: keptFiles.length,
+      skipped: blobs.length - keptFiles.length,
+      files: keptFiles
     };
 }
-//TODO for scanRepository:
-
-// 1. Truncated tree ignored
-// Large repos:
-// "truncated": true
-// silently miss files
-
-// 2. Order bias
-// stop early:
-// break;
-// may miss important files
-// keep random ones
-
-// 3. No prioritization
-// All files treated equally
-// Better:
-// prioritize /src, /lib
 
 function encodeGitHubPath(path: string): string {
     // if the file path contains special characters or spaces, encodeURIComponent will encode them. However, it will also encode "/" which we want to keep as it is for GitHub API. So we split the path by "/", encode each part, and then join them back with "/".
     return path.split("/").map((part) => encodeURIComponent(part)).join("/");
-}
-
-function toLines(text: string): string[] {
-    //This function normalizes line endings to "\n" and then splits the text into lines. This way, it can handle files with different line ending styles (Windows uses "\r\n", Unix uses "\n", old Mac used "\r").
-    return text.replace(/\r\n/g, "\n").split("\n");
 }
 
 function isProbablyBinary(text: string): boolean {
@@ -231,42 +308,63 @@ function isProbablyBinary(text: string): boolean {
     return text.includes("\u0000");
 }
 
-function chunkTextByLines( //TODO: AST-based or token-based chunking 
+function chunkTextByTokens( //
   filePath: string,
   text: string,
-  chunkSizeLines: number,
-  overlapLines: number
+  chunkSize = 350,
+  overlap = 60
 ): FileChunk[] {
-  const lines = toLines(text);
+
+  const tokens = encode(text);
+
+  if (tokens.length < 300) {
+    // small file → no need to split aggressively
+    return [{
+      filePath,
+      chunkIndex: 0,
+      content: text,
+      charCount: text.length,
+      language: EXTENSION_LANGUAGE_MAP[extensionOf(filePath)] || "unknown",
+      tokenCount: tokens.length
+    }];
+  }
+
   const chunks: FileChunk[] = [];
 
-  if (lines.length === 0) return chunks;
+  let start = 0;
+  let chunkIndex = 0;
 
-  const step = chunkSizeLines - overlapLines; // This is how many new lines we move forward for each chunk. 
-  // For example, if chunkSizeLines is 80 and overlapLines is 10, then step will be 70. 
-  // This means that each chunk will start 70 lines after the previous chunk's start, resulting in a 10-line overlap between consecutive chunks.
-  // We make overlap to preserve some context between chunks, which can be helpful for downstream processing that may need to understand the relationship between lines.
+  while (start < tokens.length) {
+    const end = Math.min(start + chunkSize, tokens.length);
 
-  for (let start = 0, chunkIndex = 0; start < lines.length; start += step, chunkIndex += 1) {
-    const endExclusive = Math.min(start + chunkSizeLines, lines.length);
-    const content = lines.slice(start, endExclusive).join("\n"); //We join the lines back together with "\n" to reconstruct the chunk's text content.
+    const tokenSlice = tokens.slice(start, end);
+    let content = decode(tokenSlice);
+
+    // If the chunk ends in the middle of a line, we can trim back to the last full line to avoid splitting code in awkward places. This is a heuristic that can help maintain better code readability in the chunks, which may lead to better embeddings and completions later on.
+    const lastNewline = content.lastIndexOf("\n");
+    if (lastNewline > 100) {
+      content = content.slice(0, lastNewline);
+    }
 
     chunks.push({
       filePath,
       chunkIndex,
-      startLine: start + 1,
-      endLine: endExclusive,
       content,
-      charCount: content.length
+      charCount: content.length,
+      language: EXTENSION_LANGUAGE_MAP[extensionOf(filePath)] || "unknown",
+      tokenCount: tokenSlice.length
     });
 
-    if (endExclusive >= lines.length) break;
+    if (end >= tokens.length) break;
+
+    start += chunkSize - overlap;
+    chunkIndex++;
   }
 
   return chunks;
 }
 
-async function fetchFileContentFromGitHub( //TODO: add caching layer to avoid refetching the same file and timeout+retry logic for large files that may take a long time to fetch and decode.
+async function fetchFileContentFromGitHub( //TODO: add caching layer to avoid refetching the same file.
   owner: string,
   repo: string,
   branch: string,
@@ -274,7 +372,7 @@ async function fetchFileContentFromGitHub( //TODO: add caching layer to avoid re
 ): Promise<string> {
   const encodedPath = encodeGitHubPath(filePath);
 
-  const payload = await githubGet<GitHubContentResponse>(
+  const payload = await githubGetWithRetry<GitHubContentResponse>(
     "https://api.github.com/repos/" +
       owner +
       "/" +
@@ -295,6 +393,10 @@ async function fetchFileContentFromGitHub( //TODO: add caching layer to avoid re
 
   const decoded = Buffer.from(payload.content.replace(/\n/g, ""), "base64").toString("utf8");
 
+  if (decoded.length > 300_000) {
+    throw new ApiError(400, "File too large after decoding");
+  }
+
   if (isProbablyBinary(decoded)) {
     throw new ApiError(400, "Binary file detected");
   }
@@ -313,17 +415,17 @@ export async function fetchAndChunkFiles(
     throw new ApiError(400, "files must be a non-empty array");
   }
 
-  const chunkSizeLines = input.chunkSizeLines ?? DEFAULT_CHUNK_SIZE_LINES;
-  const overlapLines = input.overlapLines ?? DEFAULT_CHUNK_OVERLAP_LINES;
+  const chunkSizeTokens = input.chunkSizeTokens ?? DEFAULT_CHUNK_SIZE_TOKENS;
+  const overlapTokens = input.overlapTokens ?? DEFAULT_CHUNK_OVERLAP_TOKENS;
   const maxFilesToFetch = input.maxFilesToFetch ?? DEFAULT_MAX_FETCH_FILES;
   const maxFileSizeBytes = input.maxFileSizeBytes ?? DEFAULT_MAX_FETCH_FILE_SIZE_BYTES;
 
-  if (chunkSizeLines <= 0) {
-    throw new ApiError(400, "chunkSizeLines must be greater than 0");
+  if (chunkSizeTokens <= 0) {
+    throw new ApiError(400, "chunkSizeTokens must be greater than 0");
   }
 
-  if (overlapLines < 0 || overlapLines >= chunkSizeLines) {
-    throw new ApiError(400, "overlapLines must be >= 0 and less than chunkSizeLines");
+  if (overlapTokens < 0 || overlapTokens >= chunkSizeTokens) {
+    throw new ApiError(400, "overlapTokens must be >= 0 and less than chunkSizeTokens");
   }
 
   const selectedFiles = input.files.slice(0, maxFilesToFetch);
@@ -333,38 +435,55 @@ export async function fetchAndChunkFiles(
   let processedFiles = 0;
   let skippedFiles = 0;
 
-  for (const file of selectedFiles) {  //TODO: parallelize fetching and chunking by using Promise.all with a concurrency limit to speed up processing of multiple files, especially for large repositories. We can use a library like p-limit to control the concurrency and avoid overwhelming the GitHub API or our server resources.
-    if (file.size !== null && file.size > maxFileSizeBytes) {
-      skippedFiles += 1;
+  const limit = pLimit(5); // safe concurrency
+// We use p-limit to control the concurrency of fetching and chunking files. This is important because if we try to fetch too many files at once, especially large ones, we might run into rate limits or memory issues. By limiting the concurrency to 5, we ensure that only 5 files are being processed at the same time, which can help balance speed and resource usage.
+  const tasks: Promise<FetchResult>[] = selectedFiles.map((file) =>
+    limit(async () => {
+      if (file.size !== null && file.size > maxFileSizeBytes) {
+        return {
+          type: "skipped",
+          filePath: file.path,
+          reason: "File exceeds maxFileSizeBytes"
+        };
+      }
+
+      try {
+        const text = await fetchFileContentFromGitHub(
+          input.owner,
+          input.repo,
+          input.branch,
+          file.path
+        );
+
+        const fileChunks = chunkTextByTokens(
+          file.path,
+          text,
+          chunkSizeTokens,
+          overlapTokens
+        );
+
+        return { type: "success", fileChunks };
+      } catch (error) {
+        return {
+          type: "error",
+          filePath: file.path,
+          reason: error instanceof Error ? error.message : "Unknown error"
+        };
+      }
+    })
+  );
+
+  const results = await Promise.all(tasks); //Promise.all will wait for all the tasks to complete and then return an array of results.
+
+  for (const result of results) {
+    if (result.type === "success") {
+      chunks.push(...result.fileChunks);
+      processedFiles++;
+    } else {
+      skippedFiles++;
       errors.push({
-        filePath: file.path,
-        reason: "File exceeds maxFileSizeBytes"
-      });
-      continue;
-    }
-
-    try {
-      const text = await fetchFileContentFromGitHub(
-        input.owner,
-        input.repo,
-        input.branch,
-        file.path
-      );
-
-      const fileChunks = chunkTextByLines(
-        file.path,
-        text,
-        chunkSizeLines,
-        overlapLines
-      );
-
-      chunks.push(...fileChunks);
-      processedFiles += 1;
-    } catch (error) {
-      skippedFiles += 1;
-      errors.push({
-        filePath: file.path,
-        reason: error instanceof Error ? error.message : "Unknown fetch/chunk error"
+        filePath: result.filePath,
+        reason: result.reason
       });
     }
   }
@@ -382,19 +501,29 @@ export async function fetchAndChunkFiles(
   };
 }
 
+function hashContent(content: string): string {
+  // This function generates a SHA-256 hash of the file content. This can be used to create a unique identifier for the chunk, which can help with deduplication and updates in the future. If the content of a chunk changes, its hash will change, allowing us to detect that it has been modified.
+  return crypto.createHash("sha256").update(content).digest("hex");
+}
+
 function mapChunksForIndexing(chunks: FileChunk[]): IndexChunkInput[] {
-  return chunks.map((chunk) => ({
-    filePath: chunk.filePath,
-    chunkIndex: chunk.chunkIndex,
-    content: chunk.content,
-    tokenCount: null,
-    metadata: {
-      startLine: chunk.startLine,
-      endLine: chunk.endLine,
-      charCount: chunk.charCount,
-      source: "github"
-    }
-  }));
+
+  return chunks.map((chunk) => {
+    const hash = hashContent(chunk.content);
+    return{
+      id: `${chunk.filePath}:${hash}`, //By including the file path and content hash in the chunk ID, we can create a unique identifier for each chunk that reflects both its location and its content. This way, if the same chunk content appears in a different file, it will have a different ID. Additionally, if the content of the chunk changes, the hash will change, resulting in a new ID, which can help with tracking updates and avoiding duplicates.
+      filePath: chunk.filePath,
+      chunkIndex: chunk.chunkIndex,
+      content: chunk.content,
+      tokenCount: chunk.tokenCount,
+      metadata: {
+        charCount: chunk.charCount,
+        source: "github",
+        language: chunk.language,
+        contentHash: hash
+      }
+    };
+  });
 }
 
 export async function ingestRepositoryToDb( input: IngestRepositoryInput ): Promise<IngestRepositoryResult> {
@@ -417,8 +546,8 @@ export async function ingestRepositoryToDb( input: IngestRepositoryInput ): Prom
       path: file.path,
       size: file.size
     })),
-    chunkSizeLines: input.chunkSizeLines,
-    overlapLines: input.overlapLines,
+    chunkSizeTokens: input.chunkSizeTokens,
+    overlapTokens: input.overlapTokens,
     maxFilesToFetch: input.fetchMaxFiles ?? scanResult.files.length,
     maxFileSizeBytes: input.fetchMaxFileSizeBytes ?? input.scanMaxFileSizeBytes
   });
@@ -458,10 +587,7 @@ export async function ingestRepositoryToDb( input: IngestRepositoryInput ): Prom
   };
 }
 
-//TODO for ingestRepositoryToDb:
-//1. Add token counting
-//2. Language detection and store as metadata
-//3. Add chunk id to enable deduplication and updates in the future
-//4. Add retry logic for transient errors during fetching and indexing
-//5. Add concurrency control by p-limit
-//6. Batch indexing instead of one by one to optimize database operations and embedding generation
+
+//TODO:
+//Caching layer
+//Commit SHA tracking to only re-ingest changed files
