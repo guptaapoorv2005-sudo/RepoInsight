@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider   = "postgresql"
+  provider  = "postgresql"
   url       = env("DATABASE_URL")
   directUrl = env("DIRECT_URL")
 }
@@ -12,11 +12,9 @@ model Repository {
   id            String      @id @default(uuid()) @db.Uuid
   owner         String
   name          String
-  defaultBranch String?     @map("default_branch") //@map maps a Prisma field → actual DB column name
-
+  defaultBranch String?     @map("default_branch")
   createdAt     DateTime    @default(now()) @map("created_at")
   updatedAt     DateTime    @updatedAt @map("updated_at")
-
   codeChunks    CodeChunk[]
 
   @@unique([owner, name])
@@ -24,26 +22,22 @@ model Repository {
 }
 
 model CodeChunk {
-  id            String   @id @default(uuid()) @db.Uuid
-
-  repositoryId  String   @map("repository_id") @db.Uuid
-  repository    Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
-
-  filePath      String   @map("file_path")
-  chunkIndex    Int      @map("chunk_index")
-
-  content       String
-  tokenCount    Int?     @map("token_count")
-
-  // pgvector column (handled via raw SQL)
-  embedding     Unsupported("vector(1536)")?
-
-  metadata      Json     @default("{}")
-
-  createdAt     DateTime @default(now()) @map("created_at")
-  updatedAt     DateTime @updatedAt @map("updated_at")
+  id           String                 @id @default(uuid()) @db.Uuid
+  repositoryId String                 @map("repository_id") @db.Uuid
+  filePath     String                 @map("file_path")
+  chunkIndex   Int                    @map("chunk_index")
+  content      String
+  tokenCount   Int?                   @map("token_count")
+  embedding    Unsupported("vector")?
+  status       String   @default("pending")
+  metadata     Json                   @default("{}")
+  createdAt    DateTime               @default(now()) @map("created_at")
+  updatedAt    DateTime               @updatedAt @map("updated_at")
+  repository   Repository             @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
 
   @@unique([repositoryId, filePath, chunkIndex])
   @@index([repositoryId])
+  @@index([repositoryId, chunkIndex])
+  @@index([embedding], map: "code_chunks_embedding_hnsw")
   @@map("code_chunks")
 }
