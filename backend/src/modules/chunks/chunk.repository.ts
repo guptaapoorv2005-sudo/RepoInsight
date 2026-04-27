@@ -92,13 +92,33 @@ export async function upsertCodeChunk(input: UpsertCodeChunkInput) {
     });
 }
 
-export async function updateChunkEmbedding(chunkId: string, embedding: number[]) {
-    const vectorLiteral = toVectorLiteral(embedding);
-    await prisma.$executeRaw`
-        UPDATE "code_chunks"  
-        SET "embedding" = ${vectorLiteral}::vector  
-        WHERE "id" = ${chunkId}::uuid
-    `;
+export async function updateChunkEmbeddingsBatch(
+  updates: Array<{ id: string; embedding: number[] }>
+) {
+  if (updates.length === 0) return;
+
+  const values = updates.map(({ id, embedding }) => {
+    return Prisma.sql`(${id}::uuid, ${toVectorLiteral(embedding)}::vector)`;
+  });
+
+  await prisma.$executeRaw`
+    UPDATE "code_chunks" AS c
+    SET 
+      "embedding" = v.embedding,
+      "status" = 'done'
+    FROM (VALUES ${Prisma.join(values)}) AS v(id, embedding)
+    WHERE c.id = v.id
+  `;
+}
+
+export async function markChunksFailed(ids: string[]) {
+  if (ids.length === 0) return;
+
+  await prisma.$executeRaw`
+    UPDATE "code_chunks"
+    SET "status" = 'failed'
+    WHERE "id" IN (${Prisma.join(ids)})
+  `;
 }
 
 export async function searchSimilarChunks(input: {
@@ -107,7 +127,8 @@ export async function searchSimilarChunks(input: {
     limit?: number;
 }) {
     const vectorLiteral = toVectorLiteral(input.queryEmbedding);
-    const limit = input.limit ?? 5;
+    const MAX_LIMIT = 50;
+    const limit = Math.min(input.limit ?? 5, MAX_LIMIT);
 
     const rows = await prisma.$queryRaw<SimilarChunk[]> `
         SELECT    
@@ -135,20 +156,33 @@ export type PendingChunk = {
   content: string;
 };
 
-export async function getChunksWithoutEmbedding(input: {
+export async function getAndLockChunksForEmbedding(input: {
   repositoryId: string;
   limit: number;
 }): Promise<PendingChunk[]> {
-  return prisma.$queryRaw<PendingChunk[]>`
-    SELECT
-      "id"::text AS "id",
-      "content"
-    FROM "code_chunks"
-    WHERE "repository_id" = ${input.repositoryId}::uuid
-      AND "embedding" IS NULL
-    ORDER BY "chunk_index" ASC
-    LIMIT ${input.limit}
-  `;
+  return prisma.$transaction(async (tx) => { //Start a transaction to ensure atomicity of the operations. This is important to prevent multiple workers from processing the same chunks simultaneously.
+    const rows = await tx.$queryRaw<PendingChunk[]>`
+      SELECT "id"::text, "content"
+      FROM "code_chunks"
+      WHERE "repository_id" = ${input.repositoryId}::uuid
+        AND "status" = 'pending'
+      ORDER BY "chunk_index"
+      LIMIT ${input.limit}
+      FOR UPDATE SKIP LOCKED
+    `;
+
+    const ids = rows.map(r => r.id);
+
+    if (ids.length > 0) {
+      await tx.$executeRaw`
+        UPDATE "code_chunks"
+        SET "status" = 'processing'
+        WHERE "id" IN (${Prisma.join(ids)})
+      `;
+    }
+
+    return rows;
+  });
 }
 
 export async function countChunksWithoutEmbedding(repositoryId: string): Promise<number> {

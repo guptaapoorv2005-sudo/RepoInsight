@@ -3,8 +3,9 @@ import { env } from "../../config/env.js";
 import { EMBEDDING_DIMENSION } from "../../config/constants.js";
 import {
   countChunksWithoutEmbedding,
-  getChunksWithoutEmbedding,
-  updateChunkEmbedding
+  getAndLockChunksForEmbedding,
+  markChunksFailed,
+  updateChunkEmbeddingsBatch
 } from "../chunks/chunk.repository.js";
 import type {
   GenerateEmbeddingsInput,
@@ -112,27 +113,31 @@ const ai = new GoogleGenAI({
 });
 
 async function geminiEmbedBatch(texts: string[]): Promise<number[][]> {
-  if (!env.GEMINI_API_KEY) {
-    throw new ApiError(500, "GEMINI_API_KEY is required for gemini provider");
-  }
+  const CONCURRENCY = 5;
 
   const results: number[][] = [];
+  let index = 0;
 
-  for (const text of texts) {
-    const res = await ai.models.embedContent({
-      model: env.GEMINI_EMBEDDING_MODEL,
-      contents: text,
-      config: {
-        outputDimensionality: EMBEDDING_DIMENSION
+  async function worker() {
+    while (index < texts.length) {
+      const i = index++;
+      const text = texts[i];
+
+      const res = await ai.models.embedContent({
+        model: env.GEMINI_EMBEDDING_MODEL,
+        contents: text,
+        config: { outputDimensionality: EMBEDDING_DIMENSION }
+      });
+
+      if (!res.embeddings?.[0]?.values) {
+        throw new Error("Invalid Gemini response");
       }
-    });
 
-    if (!res.embeddings?.[0]?.values) {
-      throw new Error("Invalid Gemini response");
+      results[i] = res.embeddings[0].values;
     }
-
-    results.push(res.embeddings[0].values);
   }
+
+  await Promise.all(Array.from({ length: CONCURRENCY }, worker));
 
   return results;
 }
@@ -186,7 +191,7 @@ export async function generateEmbeddingsForRepository(
   const provider = getEmbeddingProvider();
   const started = Date.now();
 
-  const pending = await getChunksWithoutEmbedding({
+  const pending = await getAndLockChunksForEmbedding({
     repositoryId: input.repositoryId,
     limit: maxChunks
   });
@@ -199,8 +204,23 @@ export async function generateEmbeddingsForRepository(
 
     for (const batch of batches) {
       try {
+        const safeBatch: typeof batch = [];
+        const skippedIds = [];
+
+        for (const item of batch) {
+          if (item.content.length > 8000) {
+            skippedIds.push(item.id);
+            continue;
+          }
+          safeBatch.push(item);
+        }
+
+        if (safeBatch.length === 0) {
+          await markChunksFailed(skippedIds);
+          continue;
+        }
         const vectors = await withRetry(
-          () => provider.embedBatch(batch.map((x) => x.content)),
+          () => provider.embedBatch(safeBatch.map((x) => x.content)),
           maxRetries
         );
 
@@ -208,17 +228,41 @@ export async function generateEmbeddingsForRepository(
           throw new Error("Provider returned mismatched embedding count");
         }
 
+        const successUpdates: Array<{ id: string; embedding: number[] }> = [];
+        const failedIds: string[] = [];
+
         for (let i = 0; i < batch.length; i += 1) {
-          const vector = vectors[i];
-          validateVector(vector);
-          await updateChunkEmbedding(batch[i].id, vector);
-          processedChunks += 1;
+          try {
+            validateVector(vectors[i]);
+
+            successUpdates.push({
+              id: batch[i].id,
+              embedding: vectors[i]
+            });
+
+            processedChunks++;
+          } catch (err) {
+            failedIds.push(batch[i].id);
+            errors.push({
+              chunkId: batch[i].id,
+              reason: "Invalid embedding"
+            });
+          }
         }
+
+        await updateChunkEmbeddingsBatch(successUpdates);
+
+        await markChunksFailed(failedIds);
+
       } catch (error) {
-        for (const chunk of batch) {
+        const ids = batch.map(x => x.id);
+
+        await markChunksFailed(ids);
+
+        for (const id of ids) {
           errors.push({
-            chunkId: chunk.id,
-            reason: error instanceof Error ? error.message : "Unknown embedding error"
+            chunkId: id,
+            reason: error instanceof Error ? error.message : "Unknown error"
           });
         }
       }
@@ -271,37 +315,3 @@ export async function generateQueryEmbedding(text: string): Promise<QueryEmbeddi
     model: provider.model
   };
 }
-
-//TODO:
-/*
- Critical Issues (Fix Before Scaling)
-
-## 1. ❌ No DB locking (BIGGEST ISSUE)
-
-👉 Causes:
-- duplicate processing
-- double billing (OpenAI $$$)
-
----
-
-## 2. ❌ Sequential DB writes (performance killer)
-
-👉 Needs:
-- batching OR parallelism
-
----
-
-## 3. ❌ Whole-batch failure handling
-
-👉 One error → whole batch fails
-
----
-
-## 4. ❌ No "in-progress" state
-
-👉 Chunks can be:
-- picked multiple times
-- retried infinitely
-
----
-*/
