@@ -49,7 +49,7 @@ async function searchKeywordChunks(
       content,
       0.6 as score
     FROM code_chunks
-    WHERE repository_id = $1
+    WHERE repository_id = $1::uuid
     AND to_tsvector('english', content) @@ plainto_tsquery($2)
     LIMIT $3
   `, repositoryId, query, limit);
@@ -136,56 +136,56 @@ async function optimizeQuery(question: string): Promise<string> {
   if (!trimmed) return trimmed;
 
   if (!env.GEMINI_API_KEY) {
-    throw new ApiError(500, "GEMINI_API_KEY is required for query optimization");
+    return trimmed;
   }
 
-  const url =
-    "https://generativelanguage.googleapis.com/v1beta/models/" +
-    encodeURIComponent(env.GEMINI_CHAT_MODEL) +
-    ":generateContent?key=" +
-    encodeURIComponent(env.GEMINI_API_KEY);
+  try {
+    const url =
+      "https://generativelanguage.googleapis.com/v1beta/models/" +
+      encodeURIComponent(env.GEMINI_CHAT_MODEL) +
+      ":generateContent?key=" +
+      encodeURIComponent(env.GEMINI_API_KEY);
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      systemInstruction: {
-        parts: [
-          {
-            text:
-              "Rewrite the user's question into a concise code-search query. " +
-              "Keep identifiers, file paths, APIs, error strings, and key nouns. " +
-              "Remove filler words. Output only the optimized query text, no quotes or markdown."
-          }
-        ]
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
       },
-      contents: [
-        {
-          role: "user",
-          parts: [{ text: trimmed }]
+      body: JSON.stringify({
+        systemInstruction: {
+          parts: [
+            {
+              text:
+                "Rewrite the user's question into a concise code-search query. " +
+                "Keep identifiers, file paths, APIs, error strings, and key nouns. " +
+                "Remove filler words. Output only the optimized query text, no quotes or markdown."
+            }
+          ]
+        },
+        contents: [
+          {
+            role: "user",
+            parts: [{ text: trimmed }]
+          }
+        ],
+        generationConfig: {
+          temperature: QUERY_OPTIMIZATION_TEMPERATURE,
+          maxOutputTokens: QUERY_OPTIMIZATION_MAX_OUTPUT_TOKENS
         }
-      ],
-      generationConfig: {
-        temperature: QUERY_OPTIMIZATION_TEMPERATURE,
-        maxOutputTokens: QUERY_OPTIMIZATION_MAX_OUTPUT_TOKENS
-      }
-    })
-  });
+      })
+    });
 
-  const payload = (await response.json()) as GeminiGenerateResponse;
+    const payload = (await response.json()) as GeminiGenerateResponse;
 
-  if (!response.ok) {
-    const providerMessage = payload.error?.message ?? "Unknown Gemini error";
-    throw new ApiError(
-      response.status,
-      "Gemini query optimization failed with status " + response.status + ": " + providerMessage
-    );
+    if (!response.ok) {
+      return trimmed;
+    }
+
+    const optimized = cleanOptimizedQuery(extractGeminiText(payload));
+    return optimized || trimmed;
+  } catch {
+    return trimmed;
   }
-
-  const optimized = cleanOptimizedQuery(extractGeminiText(payload));
-  return optimized || trimmed;
 }
 
 export async function retrieveQuestionContext(

@@ -203,9 +203,10 @@ export async function generateEmbeddingsForRepository(
     const batches = chunkArray(pending, batchSize);
 
     for (const batch of batches) {
+      const safeBatch: typeof batch = [];
+      const skippedIds: string[] = [];
+
       try {
-        const safeBatch: typeof batch = [];
-        const skippedIds = [];
 
         for (const item of batch) {
           if (item.content.length > 8000) {
@@ -215,8 +216,17 @@ export async function generateEmbeddingsForRepository(
           safeBatch.push(item);
         }
 
-        if (safeBatch.length === 0) {
+        if (skippedIds.length > 0) {
           await markChunksFailed(skippedIds);
+          for (const id of skippedIds) {
+            errors.push({
+              chunkId: id,
+              reason: "Chunk content too large"
+            });
+          }
+        }
+
+        if (safeBatch.length === 0) {
           continue;
         }
         const vectors = await withRetry(
@@ -224,27 +234,27 @@ export async function generateEmbeddingsForRepository(
           maxRetries
         );
 
-        if (vectors.length !== batch.length) {
+        if (vectors.length !== safeBatch.length) {
           throw new Error("Provider returned mismatched embedding count");
         }
 
         const successUpdates: Array<{ id: string; embedding: number[] }> = [];
         const failedIds: string[] = [];
 
-        for (let i = 0; i < batch.length; i += 1) {
+        for (let i = 0; i < safeBatch.length; i += 1) {
           try {
             validateVector(vectors[i]);
 
             successUpdates.push({
-              id: batch[i].id,
+              id: safeBatch[i].id,
               embedding: vectors[i]
             });
 
             processedChunks++;
           } catch (err) {
-            failedIds.push(batch[i].id);
+            failedIds.push(safeBatch[i].id);
             errors.push({
-              chunkId: batch[i].id,
+              chunkId: safeBatch[i].id,
               reason: "Invalid embedding"
             });
           }
@@ -255,7 +265,7 @@ export async function generateEmbeddingsForRepository(
         await markChunksFailed(failedIds);
 
       } catch (error) {
-        const ids = batch.map(x => x.id);
+        const ids = safeBatch.map((x) => x.id);
 
         await markChunksFailed(ids);
 

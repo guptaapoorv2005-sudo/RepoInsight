@@ -1,6 +1,6 @@
 //This is the repository layer (DAL – Data Access Layer)
 
-import { Prisma } from "@prisma/client"; //for types like JSON
+import { Prisma, PrismaClient } from "@prisma/client"; //for types like JSON
 import { prisma } from "../../lib/prisma.js"; //DB client instance
 import { EMBEDDING_DIMENSION } from "../../config/constants.js";
 
@@ -19,6 +19,8 @@ type UpsertCodeChunkInput = {
   tokenCount?: number | null;
   metadata?: Prisma.InputJsonValue;
 };
+
+type DbClient = PrismaClient | Prisma.TransactionClient;
 
 //Type for the output of the findSimilarChunks function
 export type SimilarChunk = {
@@ -48,8 +50,15 @@ function toVectorLiteral(embedding: number[]): string {
     //example: [0.1, 0.2, 0.3] => "[0.1,0.2,0.3]"
 }
 
-export async function upsertRepository(input: UpsertRepositoryInput) {
-    return prisma.repository.upsert({ //Upsert means it will either update an existing record or create a new one if it doesn't exist
+function toUuidList(ids: string[]) {
+  return Prisma.join(ids.map((id) => Prisma.sql`${id}::uuid`));
+}
+
+export async function upsertRepository(
+  input: UpsertRepositoryInput,
+  db: DbClient = prisma
+) {
+  return db.repository.upsert({ //Upsert means it will either update an existing record or create a new one if it doesn't exist
         where: {
             owner_name: {
                 owner: input.owner,
@@ -67,8 +76,11 @@ export async function upsertRepository(input: UpsertRepositoryInput) {
     });
 }
 
-export async function upsertCodeChunk(input: UpsertCodeChunkInput) {
-    return prisma.codeChunk.upsert({
+export async function upsertCodeChunk(
+  input: UpsertCodeChunkInput,
+  db: DbClient = prisma
+) {
+  return db.codeChunk.upsert({
         where: {
             repositoryId_filePath_chunkIndex: {
                 repositoryId: input.repositoryId,
@@ -111,13 +123,17 @@ export async function updateChunkEmbeddingsBatch(
   `;
 }
 
+export async function updateChunkEmbedding(id: string, embedding: number[]) {
+  await updateChunkEmbeddingsBatch([{ id, embedding }]);
+}
+
 export async function markChunksFailed(ids: string[]) {
   if (ids.length === 0) return;
 
   await prisma.$executeRaw`
     UPDATE "code_chunks"
     SET "status" = 'failed'
-    WHERE "id" IN (${Prisma.join(ids)})
+    WHERE "id" IN (${toUuidList(ids)})
   `;
 }
 
@@ -177,7 +193,7 @@ export async function getAndLockChunksForEmbedding(input: {
       await tx.$executeRaw`
         UPDATE "code_chunks"
         SET "status" = 'processing'
-        WHERE "id" IN (${Prisma.join(ids)})
+        WHERE "id" IN (${toUuidList(ids)})
       `;
     }
 
@@ -194,18 +210,3 @@ export async function countChunksWithoutEmbedding(repositoryId: string): Promise
   `;
   return rows[0]?.count ?? 0;
 }
-//TODO for above 2 functions:
-/*
-High Priority (before scaling)
- Add FOR UPDATE SKIP LOCKED
- Add partial index on (repository_id, chunk_index)
- Add embedding_status field
-Medium Priority
- Add retry + failure tracking
- Add cursor-based pagination
- Avoid COUNT(*) or cache it
-Low Priority
- Optimize memory usage
- Add batch size tuning
- Add metrics (processing speed, failures)
- */

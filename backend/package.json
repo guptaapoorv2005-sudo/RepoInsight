@@ -17,7 +17,8 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy",
     "prisma:status": "prisma migrate status",
-    "smoke:vector": "tsx src/scripts/vector-smoke-test.ts"
+    "smoke:vector": "tsx src/scripts/vector-smoke-test.ts",
+    "smoke:pipeline": "tsx src/scripts/pipeline-smoke-test.ts"
   },
   "private": "true",
   "dependencies": {
