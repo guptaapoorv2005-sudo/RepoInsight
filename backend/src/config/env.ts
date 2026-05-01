@@ -22,6 +22,11 @@ if (!DIRECT_URL) {
   throw new ApiError(500, "DIRECT_URL is required");
 }
 
+const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
+if (!REDIS_URL.trim()) {
+  throw new ApiError(500, "REDIS_URL must not be empty");
+}
+
 const CORS_ORIGIN = process.env.CORS_ORIGIN;
 
 if (!CORS_ORIGIN) {
@@ -86,6 +91,7 @@ export const env = {
   PORT: port,
   DATABASE_URL: DATABASE_URL,
   DIRECT_URL: DIRECT_URL,
+  REDIS_URL: REDIS_URL,
   CORS_ORIGIN: CORS_ORIGIN,
   GITHUB_TOKEN: GITHUB_TOKEN,
   EMBEDDING_PROVIDER: EMBEDDING_PROVIDER,
