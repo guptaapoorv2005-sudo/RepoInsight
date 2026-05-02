@@ -45,7 +45,7 @@ export async function enqueueTestJob(message: string) {
 export async function enqueueEmbeddingJob(payload: EmbeddingJobPayload) {
   return jobQueue.add(JOB_NAMES.EMBED_REPOSITORY, payload, {
     ...defaultJobOptions,
-    jobId: `embed-${payload.repositoryId}-${payload.offset}`,
+    jobId: `embed-${payload.repositoryId}-${Date.now()}`,
     removeOnComplete: true,
     removeOnFail: 50 // keep last 50 failures
   });
