@@ -11,6 +11,7 @@ import type {
     IngestRepositoryResult
 } from "./ingestion.types.js";
 import { indexRepository } from "../indexing/indexing.service.js";
+import { enqueueEmbeddingsForRepository } from "../embeddings/embeddings.service.js";
 import type { IndexChunkInput } from "../indexing/indexing.types.js";
 import pLimit from "p-limit";
 import crypto from "crypto";
@@ -45,10 +46,12 @@ type FetchResult =
 
 const DEFAULT_MAX_FILES = 300;
 const DEFAULT_MAX_FILE_SIZE_BYTES = 200_000;
-const DEFAULT_CHUNK_SIZE_TOKENS = 350;
+const DEFAULT_CHUNK_SIZE_TOKENS = 300;
 const DEFAULT_CHUNK_OVERLAP_TOKENS = 60;
 const DEFAULT_MAX_FETCH_FILES = 100;
 const DEFAULT_MAX_FETCH_FILE_SIZE_BYTES = 200_000;
+// Keep aligned with DEFAULT_MAX_CHUNKS in embeddings.service.ts
+const DEFAULT_EMBEDDING_JOB_MAX_CHUNKS = 200;
 
 const BLOCKED_DIR_PREFIXES = [
     ".git/",
@@ -563,6 +566,21 @@ export async function ingestRepositoryToDb( input: IngestRepositoryInput ): Prom
     chunks: mapChunksForIndexing(fetchResult.chunks)
   });
 
+  const repositoryId = persistResult.repositoryId;
+  const maxChunksPerJob = DEFAULT_EMBEDDING_JOB_MAX_CHUNKS;
+  const jobsToQueue = Math.max(1, Math.ceil(persistResult.totalChunks / maxChunksPerJob));
+
+  const embeddingJobs = await Promise.all(
+    Array.from({ length: jobsToQueue }, (_, i) =>
+      enqueueEmbeddingsForRepository({
+        repositoryId,
+        limit: maxChunksPerJob,
+      })
+    )
+  );
+
+  const embeddingJobIds = embeddingJobs.map((job) => job.jobId);
+
   return {
     owner: scanResult.owner,
     repo: scanResult.repo,
@@ -582,7 +600,9 @@ export async function ingestRepositoryToDb( input: IngestRepositoryInput ): Prom
     persistence: {
       repositoryId: persistResult.repositoryId,
       totalChunks: persistResult.totalChunks,
-      embeddedChunks: persistResult.embeddedChunks
+      embeddedChunks: persistResult.embeddedChunks,
+      embeddingJobsQueued: embeddingJobIds.length,
+      embeddingJobIds: embeddingJobIds
     }
   };
 }

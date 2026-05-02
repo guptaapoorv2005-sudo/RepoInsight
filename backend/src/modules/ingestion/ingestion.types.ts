@@ -84,5 +84,7 @@ export type IngestRepositoryResult = {
     repositoryId: string;
     totalChunks: number;
     embeddedChunks: number;
+    embeddingJobsQueued: number;
+    embeddingJobIds: string[];
   };
 };

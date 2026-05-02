@@ -24,7 +24,7 @@ const ingestRepositoryController = asyncHandler(async (req, res) => {
 
   return res
     .status(200)
-    .json(new ApiResponse(200, result, "Repository ingested and persisted successfully"));
+    .json(new ApiResponse(200, result, "Repository ingested and embedding jobs queued"));
 });
 
 export { 
