@@ -1,35 +1,91 @@
 import { Job, Worker } from "bullmq";
 import { bullmqConnection } from "../lib/redis-bullmq.js";
-import { QUEUE_NAME, TestJobPayload } from "./queue.js";
+import { generateEmbeddingsForRepository } from "../modules/embeddings/embeddings.service.js";
+import {
+  QUEUE_NAME,
+  JOB_NAMES,
+  JobName,
+  TestJobPayload,
+  EmbeddingJobPayload,
+  RagJobPayload
+} from "./queue.js";
 
-const handlers: Record<string, (job: Job<any>) => Promise<void>> = {
-  test: async (job: Job<TestJobPayload>) => {
+type JobHandlers = {
+  [JOB_NAMES.TEST]: (job: Job<TestJobPayload>) => Promise<void>;
+  [JOB_NAMES.EMBED_REPOSITORY]: (job: Job<EmbeddingJobPayload>) => Promise<void>;
+};
+
+// NOTE: This timeout does NOT cancel underlying execution
+async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("Embedding job timeout")), ms)
+    )
+  ]);
+}
+
+const handlers: JobHandlers = {
+  [JOB_NAMES.TEST]: async (job) => {
     console.log("Processing job", {
       jobId: job.id,
       name: job.name,
       attemptsMade: job.attemptsMade
     });
 
-    console.log("BullMQ test job received", {
+    console.log("Test job payload", {
       message: job.data.message
     });
+  },
+
+  [JOB_NAMES.EMBED_REPOSITORY]: async (job) => {
+    console.log("Processing embedding job", {
+      jobId: job.id,
+      repositoryId: job.data.repositoryId,
+      attemptsMade: job.attemptsMade
+    });
+
+    try {
+      const result = await withTimeout(generateEmbeddingsForRepository(job.data), 60000); // 60s timeout
+      
+      await job.updateProgress({
+        processedChunks: result.processedChunks,
+        remainingChunks: result.remainingChunks
+      });
+
+      console.log("Embedding job completed", {
+        jobId: job.id,
+        repositoryId: result.repositoryId,
+        processedChunks: result.processedChunks,
+        failedChunks: result.failedChunks,
+        remainingChunks: result.remainingChunks
+      });
+    } 
+    catch (error) {
+      console.error("Embedding job error", {
+        jobId: job.id,
+        repositoryId: job.data.repositoryId,
+        error: error instanceof Error ? error.message : error
+      });
+      throw error; // IMPORTANT → so BullMQ retries
+    }
   }
 };
 
-const worker = new Worker(
+const worker = new Worker<RagJobPayload>(
   QUEUE_NAME,
   async (job) => {
-    const handler = handlers[job.name];
+    const jobName = job.name as JobName;
 
-    if (!handler) {
+    if (!(jobName in handlers)) {
       throw new Error(`No handler for job: ${job.name}`);
     }
 
-    await handler(job);
+    await handlers[jobName](job as any); // safe due to runtime check
   },
   {
     connection: bullmqConnection,
-    concurrency: 5
+    concurrency: 1 // concurrency means how many jobs can be processed in parallel by this worker instance.
   }
 );
 
