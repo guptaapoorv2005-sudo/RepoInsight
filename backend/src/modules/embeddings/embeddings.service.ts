@@ -1,18 +1,23 @@
 import { ApiError } from "../../utils/ApiError.js";
 import { env } from "../../config/env.js";
 import { EMBEDDING_DIMENSION } from "../../config/constants.js";
+import { prisma } from "../../lib/prisma.js";
+import { redis } from "../../lib/redis.js";
+import { enqueueEmbeddingJob } from "../../queues/queue.js";
 import {
   countChunksWithoutEmbedding,
-  getAndLockChunksForEmbedding,
   markChunksFailed,
   updateChunkEmbeddingsBatch
 } from "../chunks/chunk.repository.js";
 import type {
   GenerateEmbeddingsInput,
   GenerateEmbeddingsResult,
-  EmbeddingError
+  EmbeddingError,
+  EnqueueEmbeddingsResult
 } from "./embeddings.types.js";
 import { GoogleGenAI } from "@google/genai";
+import crypto from "crypto";
+import pLimit from "p-limit";
 
 type EmbeddingProvider = {
   name: "openai" | "gemini";
@@ -24,10 +29,30 @@ type OpenAiEmbeddingsResponse = {
   data: Array<{ embedding: number[]; index: number }>;
 };
 
-const DEFAULT_BATCH_SIZE = 20;
-const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_MAX_CHUNKS = 200;
 const RETRY_BASE_DELAY_MS = 500;
+const QUERY_EMBEDDING_CACHE_TTL_SECONDS = 60 * 60;
+const QUERY_EMBEDDING_CACHE_PREFIX = "cache:query-embedding:v1";
+
+type NormalizedEmbeddingInput = {
+  repositoryId: string;
+  batchSize: number;
+  maxRetries: number;
+  limit: number;
+};
+
+function hashText(text: string): string {
+  return crypto.createHash("sha256").update(text).digest("hex");
+}
+
+function buildQueryEmbeddingCacheKey(provider: EmbeddingProvider, text: string): string {
+  return [
+    QUERY_EMBEDDING_CACHE_PREFIX,
+    provider.name,
+    provider.model,
+    hashText(text)
+  ].join(":");
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -113,31 +138,27 @@ const ai = new GoogleGenAI({
 });
 
 async function geminiEmbedBatch(texts: string[]): Promise<number[][]> {
-  const CONCURRENCY = 5;
+  const limit = pLimit(env.EMBEDDING_CONCURRENCY ?? 2);
 
-  const results: number[][] = [];
-  let index = 0;
+  const results: number[][] = new Array(texts.length);
 
-  async function worker() {
-    while (index < texts.length) {
-      const i = index++;
-      const text = texts[i];
+  await Promise.all(
+    texts.map((text, i) =>
+      limit(async () => {
+        const res = await ai.models.embedContent({
+          model: env.GEMINI_EMBEDDING_MODEL,
+          contents: text,
+          config: { outputDimensionality: EMBEDDING_DIMENSION }
+        });
 
-      const res = await ai.models.embedContent({
-        model: env.GEMINI_EMBEDDING_MODEL,
-        contents: text,
-        config: { outputDimensionality: EMBEDDING_DIMENSION }
-      });
+        if (!res.embeddings?.[0]?.values) {
+          throw new Error("Invalid Gemini response");
+        }
 
-      if (!res.embeddings?.[0]?.values) {
-        throw new Error("Invalid Gemini response");
-      }
-
-      results[i] = res.embeddings[0].values;
-    }
-  }
-
-  await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+        results[i] = res.embeddings[0].values;
+      })
+    )
+  );
 
   return results;
 }
@@ -168,32 +189,27 @@ function getEmbeddingProvider(): EmbeddingProvider {
 export async function generateEmbeddingsForRepository(
   input: GenerateEmbeddingsInput
 ): Promise<GenerateEmbeddingsResult> {
-  if (!input.repositoryId) {
-    throw new ApiError(400, "repositoryId is required");
-  }
-
-  const batchSize = input.batchSize ?? env.EMBEDDING_BATCH_SIZE;
-  const maxRetries = input.maxRetries ?? env.EMBEDDING_MAX_RETRIES;
-  const maxChunks = input.maxChunks ?? DEFAULT_MAX_CHUNKS;
-
-  if (batchSize <= 0) {
-    throw new ApiError(400, "batchSize must be greater than 0");
-  }
-
-  if (maxRetries < 0) {
-    throw new ApiError(400, "maxRetries must be >= 0");
-  }
-
-  if (maxChunks <= 0) {
-    throw new ApiError(400, "maxChunks must be greater than 0");
-  }
+  const normalized = normalizeEmbeddingInput(input);
+  const batchSize = normalized.batchSize;
+  const maxRetries = normalized.maxRetries;
+  const limit = normalized.limit;
 
   const provider = getEmbeddingProvider();
   const started = Date.now();
 
-  const pending = await getAndLockChunksForEmbedding({
-    repositoryId: input.repositoryId,
-    limit: maxChunks
+  const pending = await prisma.$transaction(async (tx) => {
+    const rows = await tx.$queryRaw<Array<{ id: string; content: string }>>`
+      SELECT "id"::text AS id, "content"
+      FROM "code_chunks"
+      WHERE "repository_id" = ${normalized.repositoryId}::uuid
+        AND "embedding" IS NULL
+        AND "status" = 'pending'
+      ORDER BY "file_path" ASC, "chunk_index" ASC
+      LIMIT ${limit}
+      FOR UPDATE SKIP LOCKED
+    `;
+
+    return rows;
   });
 
   const errors: EmbeddingError[] = [];
@@ -279,10 +295,10 @@ export async function generateEmbeddingsForRepository(
     }
   }
 
-  const remainingChunks = await countChunksWithoutEmbedding(input.repositoryId);
+  const remainingChunks = await countChunksWithoutEmbedding(normalized.repositoryId);
 
   return {
-    repositoryId: input.repositoryId,
+    repositoryId: normalized.repositoryId,
     provider: provider.name,
     model: provider.model,
     requestedChunks: pending.length,
@@ -291,6 +307,23 @@ export async function generateEmbeddingsForRepository(
     remainingChunks,
     durationMs: Date.now() - started,
     errors
+  };
+}
+
+export async function enqueueEmbeddingsForRepository(
+  input: GenerateEmbeddingsInput
+): Promise<EnqueueEmbeddingsResult> {
+  const normalized = normalizeEmbeddingInput(input);
+
+  const job = await enqueueEmbeddingJob({
+    repositoryId: normalized.repositoryId,
+    limit: normalized.limit
+  });
+
+  return {
+    repositoryId: normalized.repositoryId,
+    jobId: String(job.id),
+    status: "queued"
   };
 }
 
@@ -307,6 +340,25 @@ export async function generateQueryEmbedding(text: string): Promise<QueryEmbeddi
   }
 
   const provider = getEmbeddingProvider();
+  const cacheKey = buildQueryEmbeddingCacheKey(provider, trimmed);
+
+  try {
+    const cached = await redis.get(cacheKey);
+    if (cached) {
+      const parsed = JSON.parse(cached) as QueryEmbeddingResult;
+      if (Array.isArray(parsed.vector)) {
+        validateVector(parsed.vector);
+        return {
+          vector: parsed.vector,
+          provider: parsed.provider,
+          model: parsed.model
+        };
+      }
+    }
+  } catch {
+    // Best-effort cache read; ignore failures.
+  }
+
   const vectors = await withRetry(
     () => provider.embedBatch([trimmed]),
     env.EMBEDDING_MAX_RETRIES
@@ -319,9 +371,52 @@ export async function generateQueryEmbedding(text: string): Promise<QueryEmbeddi
   const vector = vectors[0];
   validateVector(vector);
 
+  try {
+    await redis.set(
+      cacheKey,
+      JSON.stringify({ vector, provider: provider.name, model: provider.model }),
+      "EX",
+      QUERY_EMBEDDING_CACHE_TTL_SECONDS
+    );
+  } catch {
+    // Best-effort cache write; ignore failures.
+  }
+
   return {
     vector,
     provider: provider.name,
     model: provider.model
   };
 }
+
+function normalizeEmbeddingInput(input: GenerateEmbeddingsInput): NormalizedEmbeddingInput {
+  if (!input.repositoryId) {
+    throw new ApiError(400, "repositoryId is required");
+  }
+
+  const batchSize = input.batchSize ?? env.EMBEDDING_BATCH_SIZE;
+  const maxRetries = input.maxRetries ?? env.EMBEDDING_MAX_RETRIES;
+  const limit = input.limit ?? input.maxChunks ?? DEFAULT_MAX_CHUNKS;
+
+  if (batchSize <= 0) {
+    throw new ApiError(400, "batchSize must be greater than 0");
+  }
+
+  if (maxRetries < 0) {
+    throw new ApiError(400, "maxRetries must be >= 0");
+  }
+
+  if (!Number.isInteger(limit) || limit <= 0) {
+    throw new ApiError(400, "limit must be a positive integer");
+  }
+
+  return {
+    repositoryId: input.repositoryId,
+    batchSize,
+    maxRetries,
+    limit
+  };
+}
+
+//TODO:
+//add timeout to external API calls(If provider hangs → your worker hangs)

@@ -3,6 +3,7 @@ export type GenerateEmbeddingsInput = {
   batchSize?: number;
   maxRetries?: number;
   maxChunks?: number;
+  limit?: number;
 };
 
 export type EmbeddingError = {
@@ -20,4 +21,10 @@ export type GenerateEmbeddingsResult = {
   remainingChunks: number;
   durationMs: number;
   errors: EmbeddingError[];
+};
+
+export type EnqueueEmbeddingsResult = {
+  repositoryId: string;
+  jobId: string;
+  status: "queued";
 };
