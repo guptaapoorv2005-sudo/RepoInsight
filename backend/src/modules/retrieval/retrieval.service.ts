@@ -1,4 +1,5 @@
 import { prisma } from "../../lib/prisma.js";
+import { redis } from "../../lib/redis.js";
 import { ApiError } from "../../utils/ApiError.js";
 import { env } from "../../config/env.js";
 import { searchSimilarChunks, SimilarChunk } from "../chunks/chunk.repository.js";
@@ -9,12 +10,15 @@ import type {
   RetrievalContextResult
 } from "./retrieval.types.js";
 import { encode } from "gpt-tokenizer";
+import crypto from "crypto";
 
 const DEFAULT_TOP_K = 5;
 const MAX_TOP_K = 20;
 const MAX_CONTEXT_TOKENS = 3000;
 const QUERY_OPTIMIZATION_MAX_OUTPUT_TOKENS = 64;
 const QUERY_OPTIMIZATION_TEMPERATURE = 0.1;
+const RETRIEVAL_CACHE_TTL_SECONDS = 60 * 5;
+const RETRIEVAL_CACHE_PREFIX = "cache:retrieval:v1";
 
 type GeminiGenerateResponse = {
   candidates?: Array<{
@@ -26,6 +30,28 @@ type GeminiGenerateResponse = {
     message?: string;
   };
 };
+
+function hashText(text: string): string {
+  return crypto.createHash("sha256").update(text).digest("hex");
+}
+
+function buildEmbeddingProviderKey(): string {
+  if (env.EMBEDDING_PROVIDER === "gemini") {
+    return "gemini:" + env.GEMINI_EMBEDDING_MODEL;
+  }
+
+  return "openai:" + env.OPENAI_EMBEDDING_MODEL;
+}
+
+function buildRetrievalCacheKey(repositoryId: string, question: string, topK: number): string {
+  return [
+    RETRIEVAL_CACHE_PREFIX,
+    repositoryId,
+    buildEmbeddingProviderKey(),
+    String(topK),
+    hashText(question)
+  ].join(":");
+}
 
 export async function retrieveSimilarChunks(input: RetrievalInput) {
   return searchSimilarChunks({
@@ -204,6 +230,16 @@ export async function retrieveQuestionContext(
     throw new ApiError(400, "topK must be between 1 and " + MAX_TOP_K);
   }
 
+  const cacheKey = buildRetrievalCacheKey(input.repositoryId, input.question, topK);
+  try {
+    const cached = await redis.get(cacheKey);
+    if (cached) {
+      return JSON.parse(cached) as RetrievalContextResult;
+    }
+  } catch {
+    // Best-effort cache read; ignore failures.
+  }
+
   const optimizedQuery = await optimizeQuery(input.question);
 
   const embedding = await generateQueryEmbedding(optimizedQuery);
@@ -229,7 +265,7 @@ export async function retrieveQuestionContext(
 
   const trimmed = trimByTokens(filtered, MAX_CONTEXT_TOKENS);
 
-  return {
+  const result: RetrievalContextResult = {
     repositoryId: input.repositoryId,
     question: input.question,
     topK,
@@ -245,4 +281,12 @@ export async function retrieveQuestionContext(
     })),
     contextText: buildContextText(trimmed)
   };
+
+  try {
+    await redis.set(cacheKey, JSON.stringify(result), "EX", RETRIEVAL_CACHE_TTL_SECONDS);
+  } catch {
+    // Best-effort cache write; ignore failures.
+  }
+
+  return result;
 }
