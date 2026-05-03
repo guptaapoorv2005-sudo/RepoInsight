@@ -4,7 +4,7 @@ import { retrieveQuestionContext } from "../retrieval/retrieval.service.js";
 import type {
   GenerateCompletionInput,
   GenerateCompletionResult,
-  CompletionCitation
+  CompletionCitation,
 } from "./completions.types.js";
 
 const DEFAULT_TOP_K = 5;
@@ -145,6 +145,12 @@ async function generateWithGemini(input: {
     ":generateContent?key=" +
     encodeURIComponent(env.GEMINI_API_KEY);
 
+  const controller = new AbortController();
+
+  const timeout = setTimeout(() => {
+    controller.abort();
+  }, 15000);
+
   const response = await fetch(url, {
     method: "POST",
     headers: {
@@ -164,8 +170,11 @@ async function generateWithGemini(input: {
         temperature: input.temperature,
         maxOutputTokens: input.maxOutputTokens
       }
-    })
+    }),
+    signal: controller.signal
   });
+
+  clearTimeout(timeout);
 
   const payload = (await response.json()) as GeminiGenerateResponse;
 
