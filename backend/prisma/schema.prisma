@@ -8,8 +8,22 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
+model User {
+  id           String         @id @default(uuid()) @db.Uuid
+  email        String         @unique
+  password     String
+  refreshToken String?        @map("refresh_token")
+  createdAt    DateTime       @default(now()) @map("created_at")
+  updatedAt    DateTime       @updatedAt @map("updated_at")
+  repositories Repository[]
+  chats        Chat[]
+
+  @@map("users")
+}
+
 model Repository {
   id            String      @id @default(uuid()) @db.Uuid
+  userId        String      @map("user_id") @db.Uuid
   owner         String
   name          String
   defaultBranch String?     @map("default_branch")
@@ -17,7 +31,10 @@ model Repository {
   updatedAt     DateTime    @updatedAt @map("updated_at")
   codeChunks    CodeChunk[]
 
-  @@unique([owner, name])
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chats         Chat[]
+
+  @@unique([owner, name, userId])
   @@map("repositories")
 }
 
@@ -29,10 +46,11 @@ model CodeChunk {
   content      String
   tokenCount   Int?                   @map("token_count")
   embedding    Unsupported("vector(1536)")?
-  status       String   @default("pending")
+  status       String                 @default("pending")
   metadata     Json                   @default("{}")
   createdAt    DateTime               @default(now()) @map("created_at")
   updatedAt    DateTime               @updatedAt @map("updated_at")
+
   repository   Repository             @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
 
   @@unique([repositoryId, filePath, chunkIndex])
@@ -40,4 +58,36 @@ model CodeChunk {
   @@index([repositoryId, chunkIndex])
   @@index([embedding], map: "code_chunks_embedding_hnsw")
   @@map("code_chunks")
+}
+
+model Chat {
+  id            String      @id @default(uuid()) @db.Uuid
+  userId        String      @map("user_id") @db.Uuid
+  repositoryId  String      @map("repository_id") @db.Uuid
+  title         String?
+  createdAt     DateTime    @default(now()) @map("created_at")
+  updatedAt     DateTime    @updatedAt @map("updated_at")
+  messages      Message[]
+
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  repository    Repository  @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Message {
+  id        String      @id @default(uuid()) @db.Uuid
+  chatId    String      @map("chat_id") @db.Uuid
+  role      messageRole
+  content   String
+  createdAt DateTime    @default(now()) @map("created_at")
+
+  chat      Chat        @relation(fields: [chatId], references: [id], onDelete: Cascade)
+
+  @@index([chatId, createdAt])
+}
+
+enum messageRole {
+  user
+  assistant
 }
