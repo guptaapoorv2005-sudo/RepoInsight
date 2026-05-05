@@ -25,7 +25,7 @@ export function MessageInput({
   }, [disabled, onChange]);
 
   return (
-    <div className="flex items-end gap-3 rounded-xl border border-border bg-surface p-3 shadow-sm">
+    <div className="flex items-end gap-3 rounded-xl border border-border bg-surface p-4 transition-all duration-200">
       <Textarea
         placeholder={placeholder}
         value={value}

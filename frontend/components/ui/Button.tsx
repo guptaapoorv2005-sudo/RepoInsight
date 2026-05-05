@@ -13,20 +13,20 @@ export type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
 };
 
 const baseStyles =
-  "inline-flex items-center justify-center gap-2 rounded-full border border-transparent font-medium transition-all duration-200 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:ring-offset-2 focus-visible:ring-offset-bg hover:scale-[1.02] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:scale-100";
+  "inline-flex items-center justify-center gap-3 rounded-xl border border-transparent text-sm transition-all duration-200 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:ring-offset-2 focus-visible:ring-offset-bg active:scale-95 disabled:cursor-not-allowed disabled:opacity-60";
 
 const variantStyles: Record<ButtonVariant, string> = {
   primary:
-    "bg-accent text-white border border-accent/60 hover:bg-accent-strong shadow-[0_16px_40px_-28px_rgba(124,58,237,0.65)]",
+    "bg-accent text-white border border-accent/60 hover:bg-accent/90 shadow-[0_14px_32px_-26px_rgba(15,17,21,0.7)]",
   secondary:
-    "bg-surface text-ink border-border hover:border-accent/60 hover:bg-surface-muted",
-  ghost: "bg-transparent text-muted hover:text-ink hover:bg-surface-muted"
+    "bg-surface text-ink border-border hover:border-accent/40 hover:bg-hover",
+  ghost: "bg-transparent text-muted hover:text-ink hover:bg-hover"
 };
 
 const sizeStyles: Record<ButtonSize, string> = {
-  sm: "h-9 px-4 text-sm",
-  md: "h-11 px-5 text-sm",
-  lg: "h-12 px-6 text-base"
+  sm: "px-3 py-2 text-sm",
+  md: "px-4 py-3 text-sm",
+  lg: "px-4 py-3 text-sm"
 };
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(

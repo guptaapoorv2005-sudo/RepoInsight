@@ -13,13 +13,13 @@ export function ProgressBar({ value, max, indeterminate, className }: ProgressBa
   return (
     <div
       className={cn(
-        "relative h-2 w-full overflow-hidden rounded-full bg-border",
+        "relative h-2 w-full overflow-hidden rounded-full bg-hover",
         className
       )}
     >
       <div
         className={cn(
-          "h-full rounded-full bg-linear-to-r from-accent to-accent-strong transition-[width] duration-500 ease-out",
+          "h-full rounded-full bg-linear-to-r from-accent to-accent-strong transition-all duration-200 ease-out",
           indeterminate ? "w-1/3 animate-progress" : null
         )}
         style={indeterminate ? undefined : { width: percent + "%" }}

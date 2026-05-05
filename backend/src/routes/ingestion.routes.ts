@@ -1,12 +1,9 @@
 import { Router } from "express";
-import { fetchAndChunkController, ingestRepositoryController, scanRepositoryController } from "../modules/ingestion/ingestion.controller.js";
+import { ingestRepositoryController } from "../modules/ingestion/ingestion.controller.js";
+import { verifyJWT } from "../middlewares/auth.middleware.js";
 
 const router = Router();
 
-router.post("/scan", scanRepositoryController);
-
-router.post("/fetch-chunk", fetchAndChunkController);
-
-router.post("/run", ingestRepositoryController);
+router.post("/run", verifyJWT, ingestRepositoryController);
 
 export default router;

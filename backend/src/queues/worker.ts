@@ -42,20 +42,31 @@ const handlers: JobHandlers = {
     console.log("Processing embedding job", {
       jobId: job.id,
       repositoryId: job.data.repositoryId,
+      userId: job.data.userId,
       attemptsMade: job.attemptsMade
     });
 
     try {
-      const result = await withTimeout(generateEmbeddingsForRepository(job.data), 60000); // 60s timeout
-      
+      const result = await withTimeout(
+        generateEmbeddingsForRepository(job.data, async (progress) => {
+          try {
+            await job.updateProgress(progress);
+          } catch {
+            // ignore progress update failures
+          }
+        }),
+        60000
+      ); // 60s timeout
+
       await job.updateProgress({
-        processedChunks: result.processedChunks,
+        processedChunks: result.processedChunks + result.failedChunks,
         remainingChunks: result.remainingChunks
       });
 
       console.log("Embedding job completed", {
         jobId: job.id,
         repositoryId: result.repositoryId,
+        userId: job.data.userId,
         processedChunks: result.processedChunks,
         failedChunks: result.failedChunks,
         remainingChunks: result.remainingChunks
@@ -65,6 +76,7 @@ const handlers: JobHandlers = {
       console.error("Embedding job error", {
         jobId: job.id,
         repositoryId: job.data.repositoryId,
+        userId: job.data.userId,
         error: error instanceof Error ? error.message : error
       });
       throw error; // IMPORTANT → so BullMQ retries

@@ -8,6 +8,7 @@ type MessageBubbleProps = {
 
 export function MessageBubble({ message }: MessageBubbleProps) {
   const isUser = message.role === "user";
+  const isTyping = message.id === "typing-indicator";
 
   return (
     <motion.div
@@ -18,13 +19,15 @@ export function MessageBubble({ message }: MessageBubbleProps) {
     >
       <div
         className={cn(
-          "max-w-[70%] rounded-2xl border px-4 py-3 text-sm leading-relaxed",
-          isUser
-            ? "border-accent/60 bg-accent text-white"
-            : "border-border bg-surface-muted text-ink"
+          "max-w-[70%] rounded-xl px-4 py-3 text-sm leading-relaxed transition-all duration-200",
+          isUser ? "bg-accent text-white" : "bg-surface text-ink"
         )}
       >
-        <p className="whitespace-pre-wrap">{message.content}</p>
+        {isTyping ? (
+          <span className="typing-dots text-muted" aria-label="Assistant is typing" />
+        ) : (
+          <p className="whitespace-pre-wrap">{message.content}</p>
+        )}
       </div>
     </motion.div>
   );

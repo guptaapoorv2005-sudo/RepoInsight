@@ -1,15 +1,21 @@
 import { ApiError } from "../../utils/ApiError.js";
 import { env } from "../../config/env.js";
 import { retrieveQuestionContext } from "../retrieval/retrieval.service.js";
+import { getChatForUser } from "../chat/chat.service.js";
+import {
+  createMessage,
+  getRecentMessagesForChat
+} from "../messages/message.service.js";
 import type {
   GenerateCompletionInput,
   GenerateCompletionResult,
   CompletionCitation,
 } from "./completions.types.js";
 
-const DEFAULT_TOP_K = 5;
+const DEFAULT_TOP_K = 10;
 const MAX_TOP_K = 20;
 const MAX_QUESTION_LENGTH = 8000;
+const MAX_HISTORY_MESSAGES = 4;
 
 const SYSTEM_PROMPT =
   "You are RepoInsight Copilot, an expert software engineer.\n" +
@@ -19,6 +25,8 @@ const SYSTEM_PROMPT =
   "- Referencing file paths and functions\n" +
   "- Suggesting improvements when relevant\n" +
   "- Being precise and technical\n" +
+  "Give a complete explanation. Do not stop mid-sentence.\n" +
+  "Use chat history to maintain continuity when helpful.\n" +
   "If context is insufficient, explicitly say what is missing.";
 
 type ProviderCompletionResult = {
@@ -38,13 +46,32 @@ type GeminiGenerateResponse = {
   };
 };
 
-function buildUserPrompt(question: string, contextText: string): string {
+function formatChatHistory(
+  messages: Array<{ role: "user" | "assistant"; content: string }>
+): string {
+  if (messages.length === 0) {
+    return "No prior messages.";
+  }
+
+  return messages
+    .map((message) => `${message.role}: ${message.content}`)
+    .join("\n");
+}
+
+function buildUserPrompt(
+  question: string,
+  contextText: string,
+  chatHistory: string
+): string {
   return (
-    "Question:\n" +
-    question +
+    "Chat History:\n" +
+    chatHistory +
     "\n\n" +
     "Repository Context:\n" +
     contextText +
+    "\n\n" +
+    "Question:\n" +
+    question +
     "\n\n" +
     "Instructions:\n" +
     "1) Use only this context.\n" +
@@ -84,15 +111,21 @@ function buildCitations(
 }
 
 function validateInput(input: GenerateCompletionInput): {
-  repositoryId: string;
+  userId: string;
+  chatId: string;
   question: string;
   topK: number;
   temperature: number;
   maxOutputTokens: number;
 } {
-  const repositoryId = input.repositoryId?.trim();
-  if (!repositoryId) {
-    throw new ApiError(400, "repositoryId is required");
+  const userId = input.userId?.trim();
+  if (!userId) {
+    throw new ApiError(400, "userId is required");
+  }
+
+  const chatId = input.chatId?.trim();
+  if (!chatId) {
+    throw new ApiError(400, "chatId is required");
   }
 
   const question = input.question?.trim();
@@ -104,7 +137,7 @@ function validateInput(input: GenerateCompletionInput): {
     throw new ApiError(400, "question is too long");
   }
 
-  const topK = input.topK ?? DEFAULT_TOP_K;
+  const topK = DEFAULT_TOP_K;
   if (!Number.isInteger(topK) || topK <= 0 || topK > MAX_TOP_K) {
     throw new ApiError(400, "topK must be between 1 and " + MAX_TOP_K);
   }
@@ -116,13 +149,14 @@ function validateInput(input: GenerateCompletionInput): {
   }
 
   //maxOutputTokens limits the length of the generated answer. Setting it too low may truncate important information, while setting it too high may lead to unnecessarily long responses.
-  const maxOutputTokens = input.maxOutputTokens ?? env.COMPLETION_MAX_OUTPUT_TOKENS;
+  const maxOutputTokens = env.COMPLETION_MAX_OUTPUT_TOKENS;
   if (!Number.isInteger(maxOutputTokens) || maxOutputTokens <= 0) {
     throw new ApiError(400, "maxOutputTokens must be a positive integer");
   }
 
   return {
-    repositoryId,
+    userId,
+    chatId,
     question,
     topK,
     temperature,
@@ -203,8 +237,21 @@ export async function generateCompletion(
   const normalized = validateInput(input);
   const started = Date.now();
 
+  const chat = await getChatForUser(normalized.userId, normalized.chatId);
+
+  await createMessage({
+    chatId: chat.id,
+    role: "user",
+    content: normalized.question
+  });
+
+  const historyMessages = await getRecentMessagesForChat(
+    chat.id,
+    MAX_HISTORY_MESSAGES
+  );
+
   const retrieval = await retrieveQuestionContext({
-    repositoryId: normalized.repositoryId,
+    repositoryId: chat.repositoryId,
     question: normalized.question,
     topK: normalized.topK
   });
@@ -214,13 +261,24 @@ export async function generateCompletion(
   }
 
   const providerResult = await generateWithGemini({
-    userPrompt: buildUserPrompt(normalized.question, retrieval.contextText),
+    userPrompt: buildUserPrompt(
+      normalized.question,
+      retrieval.contextText,
+      formatChatHistory(historyMessages)
+    ),
     temperature: normalized.temperature,
     maxOutputTokens: normalized.maxOutputTokens
   });
 
+  await createMessage({
+    chatId: chat.id,
+    role: "assistant",
+    content: providerResult.answer
+  });
+
   return {
-    repositoryId: normalized.repositoryId,
+    repositoryId: chat.repositoryId,
+    chatId: chat.id,
     question: normalized.question,
     topK: retrieval.topK,
     model: providerResult.model,
@@ -231,8 +289,4 @@ export async function generateCompletion(
     durationMs: Date.now() - started
   };
 }
-
-//TODO;
-//rerank topK using LLM or cross-encoder
-//Add cache layer for completions to speed up repeated questions
 

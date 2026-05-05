@@ -11,6 +11,7 @@ export type IndexChunkInput = {
 };
 
 export type IndexRepositoryInput = {
+  userId: string;
   owner: string;
   name: string;
   defaultBranch?: string | null;

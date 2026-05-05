@@ -16,7 +16,15 @@ function buildEmbedding(seed: number): number[] {
 }
 
 async function main() {
+    const user = await prisma.user.create({
+        data: {
+            email: `smoke-test-${Date.now()}@example.com`,
+            password: "smoke-test"
+        }
+    });
+
     const repo = await upsertRepository({
+        userId: user.id,
         owner: "smoke-test",
         name: "repo-" + Date.now(),
         defaultBranch: "main"

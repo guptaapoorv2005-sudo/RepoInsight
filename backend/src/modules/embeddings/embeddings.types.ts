@@ -1,5 +1,6 @@
 export type GenerateEmbeddingsInput = {
   repositoryId: string;
+  userId?: string;
   batchSize?: number;
   maxRetries?: number;
   maxChunks?: number;

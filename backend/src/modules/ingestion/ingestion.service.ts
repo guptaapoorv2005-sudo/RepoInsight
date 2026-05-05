@@ -46,8 +46,8 @@ type FetchResult =
 
 const DEFAULT_MAX_FILES = 300;
 const DEFAULT_MAX_FILE_SIZE_BYTES = 200_000;
-const DEFAULT_CHUNK_SIZE_TOKENS = 300;
-const DEFAULT_CHUNK_OVERLAP_TOKENS = 60;
+const DEFAULT_CHUNK_SIZE_TOKENS = 400;
+const DEFAULT_CHUNK_OVERLAP_TOKENS = 120;
 const DEFAULT_MAX_FETCH_FILES = 100;
 const DEFAULT_MAX_FETCH_FILE_SIZE_BYTES = 200_000;
 // Keep aligned with DEFAULT_MAX_CHUNKS in embeddings.service.ts
@@ -64,6 +64,23 @@ const BLOCKED_DIR_PREFIXES = [
     "target/",
     "out/"
 ];
+
+const BLOCKED_FILES = new Set([
+  "package-lock.json",
+  "yarn.lock",
+  "pnpm-lock.yaml",
+  "bun.lockb",
+  "npm-shrinkwrap.json",
+
+  // OS junk
+  ".DS_Store",
+  "Thumbs.db",
+
+  // logs
+  "debug.log",
+  "npm-debug.log",
+  "yarn-error.log"
+]);
 
 const ALLOWED_EXTENSIONS = new Set([
     ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
@@ -193,13 +210,15 @@ function extensionOf(path: string): string {
 }
 
 function isBlockedByDirectory(path: string): boolean { //Checks if the file path starts with any of the blocked directory prefixes. For example, if path is "node_modules/lodash/index.js", it will return true because it starts with "node_modules/". If path is "src/index.ts", it will return false because it does not start with any of the blocked prefixes.
-    return BLOCKED_DIR_PREFIXES.some((prefix) => path.startsWith(prefix)); //The some() method tests whether at least one element in the array passes the test implemented by the provided function.
+    return BLOCKED_DIR_PREFIXES.some((prefix) => path.startsWith(prefix) || path.includes(`/${prefix}`)); //The some() method tests whether at least one element in the array passes the test implemented by the provided function.
 }
 
 function shouldKeep(path: string, size: number | null, maxFileSizeBytes: number): boolean {
     if (isBlockedByDirectory(path)) return false;
 
     const fileName = path.split("/").pop() || "";
+
+    if (BLOCKED_FILES.has(fileName)) return false;
 
     if (SPECIAL_FILES.has(fileName)) return true;
 
@@ -214,21 +233,49 @@ function shouldKeep(path: string, size: number | null, maxFileSizeBytes: number)
 //Since we may encounter repositories with a large number of files, we need to prioritize which files to keep when we reach the maxFiles limit.
 function scoreFile(path: string): number {
   let score = 0;
+  const lower = path.toLowerCase();
+  const fileName = lower.split("/").pop() || "";
 
-  // prioritize important dirs
-  if (path.startsWith("src/")) score += 5;
-  if (path.startsWith("app/")) score += 5;
-  if (path.startsWith("prisma/")) score += 5;
-  if (path.startsWith("lib/")) score += 4;
-  if (path.startsWith("components/")) score += 4;
+  // 1. Core directories (strong signal)
+  if (lower.includes("src/")) score += 8;
+  if (lower.includes("app/")) score += 8;
+  if (lower.includes("lib/")) score += 6;
+  if (lower.includes("core/")) score += 6;
+  if (lower.includes("services/")) score += 6;
+  if (lower.includes("utils/")) score += 5;
+  if (lower.includes("components/")) score += 4;
 
-  // deprioritize noise
-  if (path.includes("test") || path.includes("__tests__")) score -= 3;
-  if (path.includes(".lock")) score -= 5;
+  // 2. Entry points (VERY important)
+  if (
+    fileName.startsWith("index.") ||
+    fileName.startsWith("main.") ||
+    fileName.startsWith("app.") ||
+    fileName.startsWith("server.")
+  ) {
+    score += 10;
+  }
 
-  // important standalone files
-  if (path.endsWith("package.json")) score += 6;
-  if (path.toLowerCase().includes("readme")) score += 6;
+  // 3. Config / infra files
+  if (fileName === "package.json") score += 10;
+  if (fileName === "tsconfig.json") score += 6;
+  if (fileName === "next.config.js") score += 6;
+  if (fileName === "vite.config.ts") score += 6;
+
+  // 4. README (important for context)
+  if (lower.includes("readme")) score += 8;
+
+  // 5. Penalize noise heavily
+  if (lower.includes("test")) score -= 8;
+  if (lower.includes("__tests__")) score -= 10;
+  if (lower.includes("spec")) score -= 8;
+  if (lower.includes("mock")) score -= 6;
+  if (lower.includes("fixture")) score -= 6;
+  if (lower.includes("lock")) score -= 10;
+  if (lower.includes("snapshot")) score -= 10;
+
+  if (lower.includes("controller")) score += 4;
+  if (lower.includes("service")) score += 4;
+  if (lower.includes("api")) score += 4;
 
   return score;
 }
@@ -311,57 +358,66 @@ function isProbablyBinary(text: string): boolean {
     return text.includes("\u0000");
 }
 
-function chunkTextByTokens( //
+function chunkTextByTokens(
   filePath: string,
   text: string,
-  chunkSize = 350,
-  overlap = 60
+  chunkSize = 400,
+  overlap = 120
 ): FileChunk[] {
 
-  const tokens = encode(text);
+  const language = EXTENSION_LANGUAGE_MAP[extensionOf(filePath)] || "unknown";
 
-  if (tokens.length < 300) {
-    // small file → no need to split aggressively
-    return [{
-      filePath,
-      chunkIndex: 0,
-      content: text,
-      charCount: text.length,
-      language: EXTENSION_LANGUAGE_MAP[extensionOf(filePath)] || "unknown",
-      tokenCount: tokens.length
-    }];
-  }
+  // Step 1: split by functions (code-aware)
+  const parts = text.split(
+    /(?=\bfunction\s+\w+\s*\(|\bconst\s+\w+\s*=\s*\(|\b\w+\s*=>)/g
+  );
 
   const chunks: FileChunk[] = [];
-
-  let start = 0;
   let chunkIndex = 0;
 
-  while (start < tokens.length) {
-    const end = Math.min(start + chunkSize, tokens.length);
+  for (const part of parts) {
+    const tokens = encode(part);
 
-    const tokenSlice = tokens.slice(start, end);
-    let content = decode(tokenSlice);
-
-    // If the chunk ends in the middle of a line, we can trim back to the last full line to avoid splitting code in awkward places. This is a heuristic that can help maintain better code readability in the chunks, which may lead to better embeddings and completions later on.
-    const lastNewline = content.lastIndexOf("\n");
-    if (lastNewline > 100) {
-      content = content.slice(0, lastNewline);
+    // If small → keep as-is
+    if (tokens.length <= chunkSize) {
+      chunks.push({
+        filePath,
+        chunkIndex: chunkIndex++,
+        content: part,
+        charCount: part.length,
+        language,
+        tokenCount: tokens.length
+      });
+      continue;
     }
 
-    chunks.push({
-      filePath,
-      chunkIndex,
-      content,
-      charCount: content.length,
-      language: EXTENSION_LANGUAGE_MAP[extensionOf(filePath)] || "unknown",
-      tokenCount: tokenSlice.length
-    });
+    // fallback: token chunking for large functions
+    let start = 0;
 
-    if (end >= tokens.length) break;
+    while (start < tokens.length) {
+      const end = Math.min(start + chunkSize, tokens.length);
 
-    start += chunkSize - overlap;
-    chunkIndex++;
+      const tokenSlice = tokens.slice(start, end);
+      let content = decode(tokenSlice);
+
+      const lastNewline = content.lastIndexOf("\n");
+      if (lastNewline > 0) {
+        content = content.slice(0, lastNewline);
+      }
+
+      chunks.push({
+        filePath,
+        chunkIndex: chunkIndex++,
+        content,
+        charCount: content.length,
+        language,
+        tokenCount: tokenSlice.length
+      });
+
+      if (end >= tokens.length) break;
+
+      start += chunkSize - overlap;
+    }
   }
 
   return chunks;
@@ -418,10 +474,10 @@ export async function fetchAndChunkFiles(
     throw new ApiError(400, "files must be a non-empty array");
   }
 
-  const chunkSizeTokens = input.chunkSizeTokens ?? DEFAULT_CHUNK_SIZE_TOKENS;
-  const overlapTokens = input.overlapTokens ?? DEFAULT_CHUNK_OVERLAP_TOKENS;
-  const maxFilesToFetch = input.maxFilesToFetch ?? DEFAULT_MAX_FETCH_FILES;
-  const maxFileSizeBytes = input.maxFileSizeBytes ?? DEFAULT_MAX_FETCH_FILE_SIZE_BYTES;
+  const chunkSizeTokens = DEFAULT_CHUNK_SIZE_TOKENS;
+  const overlapTokens = DEFAULT_CHUNK_OVERLAP_TOKENS;
+  const maxFilesToFetch = DEFAULT_MAX_FETCH_FILES;
+  const maxFileSizeBytes = DEFAULT_MAX_FETCH_FILE_SIZE_BYTES;
 
   if (chunkSizeTokens <= 0) {
     throw new ApiError(400, "chunkSizeTokens must be greater than 0");
@@ -530,6 +586,10 @@ function mapChunksForIndexing(chunks: FileChunk[]): IndexChunkInput[] {
 }
 
 export async function ingestRepositoryToDb( input: IngestRepositoryInput ): Promise<IngestRepositoryResult> {
+  if (!input.userId) {
+    throw new ApiError(400, "userId is required");
+  }
+
   if (!input.repoUrl) {
     throw new ApiError(400, "repoUrl is required");
   }
@@ -560,6 +620,7 @@ export async function ingestRepositoryToDb( input: IngestRepositoryInput ): Prom
   }
 
   const persistResult = await indexRepository({
+    userId: input.userId,
     owner: scanResult.owner,
     name: scanResult.repo,
     defaultBranch: scanResult.branch,
@@ -574,6 +635,7 @@ export async function ingestRepositoryToDb( input: IngestRepositoryInput ): Prom
     Array.from({ length: jobsToQueue }, (_, i) =>
       enqueueEmbeddingsForRepository({
         repositoryId,
+        userId: input.userId,
         limit: maxChunksPerJob,
       })
     )

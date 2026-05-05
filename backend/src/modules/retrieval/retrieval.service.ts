@@ -12,7 +12,7 @@ import type {
 import { encode } from "gpt-tokenizer";
 import crypto from "crypto";
 
-const DEFAULT_TOP_K = 5;
+const DEFAULT_TOP_K = 10;
 const MAX_TOP_K = 20;
 const MAX_CONTEXT_TOKENS = 3000;
 const QUERY_OPTIMIZATION_MAX_OUTPUT_TOKENS = 64;
@@ -65,20 +65,55 @@ async function searchKeywordChunks(
   repositoryId: string,
   query: string,
   limit: number
-) {
-  return prisma.$queryRawUnsafe<SimilarChunk[]>(`
-    SELECT 
-      id,
-      repository_id as "repositoryId",
-      file_path as "filePath",
-      chunk_index as "chunkIndex",
-      content,
-      0.6 as score
-    FROM code_chunks
-    WHERE repository_id = $1::uuid
-    AND to_tsvector('english', content) @@ plainto_tsquery($2)
-    LIMIT $3
-  `, repositoryId, query, limit);
+): Promise<SimilarChunk[]> {
+  // Extract useful tokens (identifiers, function names, etc.)
+  const tokens =
+    query.match(/[a-zA-Z_][a-zA-Z0-9_]*/g)?.join(" ") || query;
+
+  return prisma.$queryRaw<SimilarChunk[]>`
+    WITH q AS (
+      SELECT LOWER(${tokens}) AS raw
+    ),
+    matches AS (
+      SELECT 
+        id,
+        repository_id as "repositoryId",
+        file_path as "filePath",
+        chunk_index as "chunkIndex",
+        content,
+
+        -- 1. Exact identifier match (strongest signal)
+        CASE 
+          WHEN LOWER(content) LIKE '%' || (SELECT raw FROM q) || '%' 
+          THEN 1.0 ELSE 0.0 
+        END AS exact_match_score,
+
+        -- 2. Function / variable definition boost (VERY important for code)
+        CASE 
+          WHEN LOWER(content) LIKE '%function %' || (SELECT raw FROM q) || '%'
+            OR LOWER(content) LIKE '%const %' || (SELECT raw FROM q) || '%'
+            OR LOWER(content) LIKE '%let %' || (SELECT raw FROM q) || '%'
+            OR LOWER(content) LIKE '%var %' || (SELECT raw FROM q) || '%'
+          THEN 0.8 ELSE 0.0
+        END AS definition_score,
+
+        -- 3. General text relevance (fallback signal)
+        ts_rank_cd(
+          to_tsvector('simple', content),
+          plainto_tsquery('simple', (SELECT raw FROM q))
+        ) AS text_score
+
+      FROM code_chunks
+      WHERE repository_id = ${repositoryId}::uuid
+    )
+
+    SELECT *,
+      (exact_match_score + definition_score + text_score) AS score
+    FROM matches
+    WHERE (exact_match_score > 0 OR text_score > 0)
+    ORDER BY score DESC
+    LIMIT ${limit}
+  `;
 }
 
 function mergeHybrid(
@@ -101,6 +136,31 @@ function mergeHybrid(
   }
 
   return Array.from(map.values()).sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+}
+
+function extractIdentifiers(query: string): string[] {
+  return query.match(/[a-zA-Z_][a-zA-Z0-9_]*/g) || [];
+}
+
+function boostExactMatches(matches: SimilarChunk[], query: string) {
+  const identifiers = extractIdentifiers(query).map(s => s.toLowerCase());
+
+  return matches.map(m => {
+    const content = m.content.toLowerCase();
+
+    let boost = 0;
+
+    for (const id of identifiers) {
+      if (content.includes(id)) {
+        boost += 0.25; // accumulate
+      }
+    }
+
+    return {
+      ...m,
+      score: (m.score ?? 0) + boost
+    };
+  });
 }
 
 function buildContextText(
@@ -250,17 +310,19 @@ export async function retrieveQuestionContext(
       queryEmbedding: embedding.vector,
       limit: topK
     }),
-    searchKeywordChunks(input.repositoryId, optimizedQuery, 5)
+    searchKeywordChunks(input.repositoryId, input.question, 10) // sending original question for keyword search to maximize recall; we'll boost scores later for any keyword matches that also appear in vector results
   ]);
 
   let merged = mergeHybrid(vectorMatches, keywordMatches);
+  merged = boostExactMatches(merged, input.question);
+  merged.sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
 
   // The topK filter is not enough, we need a minimum score threshold to ensure relevance
-  const MIN_SCORE = 0.75;
+  const MIN_SCORE = 0.5;
   let filtered = merged.filter(m => (m.score ?? 0) >= MIN_SCORE);
 
   if (filtered.length === 0) {
-    filtered = vectorMatches.slice(0, 2);
+    filtered = merged.slice(0, topK);
   }
 
   const trimmed = trimByTokens(filtered, MAX_CONTEXT_TOKENS);

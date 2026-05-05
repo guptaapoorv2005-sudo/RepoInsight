@@ -92,3 +92,13 @@ export async function getChatForUser(userId: string, chatId: string) {
 
   return chat;
 }
+
+export async function deleteChatForUser(userId: string, chatId: string) {
+  const chat = await getChatForUser(userId, chatId);
+
+  await prisma.chat.delete({
+    where: { id: chatId }
+  });
+
+  return chat;
+}

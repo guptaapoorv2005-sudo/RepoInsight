@@ -8,6 +8,7 @@ import { EMBEDDING_DIMENSION } from "../../config/constants.js";
 type UpsertRepositoryInput = {
   owner: string;
   name: string;
+  userId: string;
   defaultBranch?: string | null;
 };
 
@@ -60,10 +61,11 @@ export async function upsertRepository(
 ) {
   return db.repository.upsert({ //Upsert means it will either update an existing record or create a new one if it doesn't exist
         where: {
-            owner_name: {
-                owner: input.owner,
-                name: input.name
-            }
+          owner_name_userId: {
+            owner: input.owner,
+            name: input.name,
+            userId: input.userId
+          }
         },
         update: {
             defaultBranch: input.defaultBranch ?? null
@@ -71,6 +73,7 @@ export async function upsertRepository(
         create: {
             owner: input.owner,
             name: input.name,
+            userId: input.userId,
             defaultBranch: input.defaultBranch ?? null
         }
     });

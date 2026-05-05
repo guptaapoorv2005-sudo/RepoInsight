@@ -17,10 +17,10 @@ export default function Home() {
           <div className="absolute bottom-[-12%] right-[-12%] h-65 w-65 rounded-full bg-accent-soft/70 blur-[180px]" />
 
           <div className="relative z-10">
-            <p className="text-xs font-medium uppercase tracking-[0.4em] text-muted">
+            <p className="text-xs uppercase tracking-[0.4em] text-muted">
               Developer intelligence
             </p>
-            <h1 className="mt-6 text-5xl font-semibold tracking-tight text-ink font-display">
+            <h1 className="mt-6 text-5xl font-medium tracking-tight text-ink">
               RepoInsight
             </h1>
             <p className="mt-6 max-w-lg text-xl leading-relaxed text-muted">

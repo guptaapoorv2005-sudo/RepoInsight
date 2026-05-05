@@ -16,6 +16,7 @@ export type TestJobPayload = {
 
 export type EmbeddingJobPayload = {
   repositoryId: string;
+  userId: string;
   limit: number;
 };
 

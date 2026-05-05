@@ -1,7 +1,7 @@
 import { ApiError } from "../../utils/ApiError.js";
 import { ApiResponse } from "../../utils/ApiResponse.js";
 import { asyncHandler } from "../../utils/AsyncHandler.js";
-import { createChat, listChatsForUser } from "./chat.service.js";
+import { createChat, deleteChatForUser, listChatsForUser } from "./chat.service.js";
 
 const DEFAULT_CHAT_PAGE_SIZE = 20;
 const MAX_CHAT_PAGE_SIZE = 100;
@@ -59,4 +59,19 @@ const listChatsController = asyncHandler(async (req, res) => {
     .json(new ApiResponse(200, result, "Chats fetched successfully"));
 });
 
-export { createChatController, listChatsController };
+const deleteChatController = asyncHandler(async (req, res) => {
+  const chatIdParam = req.params.chatId;
+  const chatId = Array.isArray(chatIdParam) ? chatIdParam[0] : chatIdParam;
+
+  if (!chatId) {
+    throw new ApiError(400, "chatId is required");
+  }
+
+  const deleted = await deleteChatForUser(req.user.id, chatId);
+
+  return res
+    .status(200)
+    .json(new ApiResponse(200, deleted, "Chat deleted successfully"));
+});
+
+export { createChatController, listChatsController, deleteChatController };

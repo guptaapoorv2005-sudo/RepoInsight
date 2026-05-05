@@ -1,8 +1,10 @@
 import { Router } from "express";
 import { verifyJWT } from "../middlewares/auth.middleware.js";
-import { registerUser, loginUser, logoutUser, changePassword, deleteUser, getCurrentUser, refreshAccessToken } from "../modules/user/user.controller.js";
+import { registerUser, loginUser, logoutUser, changePassword, deleteUser, getCurrentUser, refreshAccessToken, googleLogin } from "../modules/user/user.controller.js";
 
 const router = Router();
+
+router.route("/google-login").post(googleLogin);
 
 router.route("/register").post(registerUser);
 

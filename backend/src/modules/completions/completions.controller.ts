@@ -5,10 +5,13 @@ import { generateCompletion } from "./completions.service.js";
 import type { GenerateCompletionInput } from "./completions.types.js";
 
 const generateCompletionController = asyncHandler(async (req, res) => {
-  const input = req.body as GenerateCompletionInput;
+  const input = {
+    ...(req.body as Omit<GenerateCompletionInput, "userId">),
+    userId: req.user.id
+  } as GenerateCompletionInput;
 
-  if (!input.repositoryId) {
-    throw new ApiError(400, "repositoryId is required");
+  if (!input.chatId) {
+    throw new ApiError(400, "chatId is required");
   }
 
   if (!input.question || !input.question.trim()) {

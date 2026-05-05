@@ -138,7 +138,7 @@ const ai = new GoogleGenAI({
 });
 
 async function geminiEmbedBatch(texts: string[]): Promise<number[][]> {
-  const limit = pLimit(env.EMBEDDING_CONCURRENCY ?? 2);
+  const limit = pLimit(env.EMBEDDING_CONCURRENCY ?? 1);
 
   const results: number[][] = new Array(texts.length);
 
@@ -186,8 +186,14 @@ function getEmbeddingProvider(): EmbeddingProvider {
   }
 }
 
+type ProgressCallback = (progress: {
+  processedChunks: number;
+  remainingChunks: number;
+}) => Promise<void> | void;
+
 export async function generateEmbeddingsForRepository(
-  input: GenerateEmbeddingsInput
+  input: GenerateEmbeddingsInput,
+  onProgress?: ProgressCallback
 ): Promise<GenerateEmbeddingsResult> {
   const normalized = normalizeEmbeddingInput(input);
   const batchSize = normalized.batchSize;
@@ -214,6 +220,16 @@ export async function generateEmbeddingsForRepository(
 
   const errors: EmbeddingError[] = [];
   let processedChunks = 0;
+  let completedChunks = 0;
+
+  const emitProgress = async () => {
+    if (!onProgress) return;
+    const remainingChunks = Math.max(0, pending.length - completedChunks);
+    await onProgress({
+      processedChunks: completedChunks,
+      remainingChunks
+    });
+  };
 
   if (pending.length > 0) {
     const batches = chunkArray(pending, batchSize);
@@ -242,7 +258,11 @@ export async function generateEmbeddingsForRepository(
           }
         }
 
+        const batchTotal = safeBatch.length + skippedIds.length;
+
         if (safeBatch.length === 0) {
+          completedChunks += batchTotal;
+          await emitProgress();
           continue;
         }
         const vectors = await withRetry(
@@ -280,6 +300,9 @@ export async function generateEmbeddingsForRepository(
 
         await markChunksFailed(failedIds);
 
+        completedChunks += batchTotal;
+        await emitProgress();
+
       } catch (error) {
         const ids = safeBatch.map((x) => x.id);
 
@@ -291,6 +314,9 @@ export async function generateEmbeddingsForRepository(
             reason: error instanceof Error ? error.message : "Unknown error"
           });
         }
+
+        completedChunks += safeBatch.length + skippedIds.length;
+        await emitProgress();
       }
     }
   }
@@ -315,8 +341,13 @@ export async function enqueueEmbeddingsForRepository(
 ): Promise<EnqueueEmbeddingsResult> {
   const normalized = normalizeEmbeddingInput(input);
 
+  if (!input.userId) {
+    throw new ApiError(400, "userId is required");
+  }
+
   const job = await enqueueEmbeddingJob({
     repositoryId: normalized.repositoryId,
+    userId: input.userId,
     limit: normalized.limit
   });
 

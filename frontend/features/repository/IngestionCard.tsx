@@ -57,13 +57,13 @@ export function IngestionCard({ onSubmit, isSubmitting, error, progress }: Inges
       animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0, scale: 0.98 }}
       transition={{ duration: 0.25, ease: "easeOut" }}
-      className="pointer-events-auto w-full max-w-lg rounded-2xl border border-border bg-surface p-8 shadow-xl"
+      className="pointer-events-auto w-full max-w-lg rounded-2xl border border-border bg-surface p-4 shadow-lg transition-all duration-200"
     >
       <div className="flex flex-col gap-3">
-        <p className="text-sm font-medium uppercase tracking-[0.18em] text-muted">
+        <p className="text-xs uppercase tracking-[0.18em] text-muted">
           Start a new chat
         </p>
-        <h2 className="text-2xl font-semibold text-ink font-display">Start a new chat</h2>
+        <h2 className="text-lg font-medium text-ink">Start a new chat</h2>
         <p className="text-sm text-muted">
           Paste a GitHub repository URL, name the conversation, and we will build an
           index before you can chat.
@@ -71,11 +71,11 @@ export function IngestionCard({ onSubmit, isSubmitting, error, progress }: Inges
       </div>
 
       <form
-        className="mt-6 flex flex-col gap-4"
+        className="mt-4 flex flex-col gap-4"
         onSubmit={handleSubmit(onSubmit)}
       >
-        <div className="flex flex-col gap-2">
-          <label className="text-xs font-medium text-muted">Repository URL</label>
+        <div className="flex flex-col gap-3">
+          <label className="text-xs text-muted">Repository URL</label>
           <Input
             placeholder="https://github.com/org/repo"
             {...register("repoUrl")}
@@ -86,8 +86,8 @@ export function IngestionCard({ onSubmit, isSubmitting, error, progress }: Inges
           ) : null}
         </div>
 
-        <div className="flex flex-col gap-2">
-          <label className="text-xs font-medium text-muted">Chat title (optional)</label>
+        <div className="flex flex-col gap-3">
+          <label className="text-xs text-muted">Chat title (optional)</label>
           <Input
             placeholder="Payments architecture review"
             {...register("title")}
@@ -101,9 +101,9 @@ export function IngestionCard({ onSubmit, isSubmitting, error, progress }: Inges
         {error ? <p className="text-sm text-red-400">{error}</p> : null}
 
         {progress ? (
-          <div className="mt-2 flex flex-col gap-3 rounded-2xl border border-border bg-surface-muted p-4">
+          <div className="mt-4 flex flex-col gap-3 rounded-2xl border border-border bg-surface-muted p-4">
             <div className="flex items-center justify-between text-xs text-muted">
-              <span className="font-medium text-ink">
+              <span className="text-ink">
                 {progress.failed
                   ? "Embedding failed"
                   : progress.indeterminate

@@ -5,6 +5,90 @@ import { ApiError } from "../../utils/ApiError.js";
 import { env } from "../../config/env.js";
 import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
+import { OAuth2Client } from "google-auth-library";
+
+const googleClient = new OAuth2Client(env.GOOGLE_CLIENT_ID);
+
+const googleLogin = asyncHandler(async (req, res) => {
+    const { credential } = req.body;
+
+    if (!credential) {
+        throw new ApiError(400, "Google token missing");
+    }
+
+    const ticket = await googleClient.verifyIdToken({
+        idToken: credential,
+        audience: env.GOOGLE_CLIENT_ID,
+    });
+
+    const payload = ticket.getPayload();
+
+    if (!payload || !payload.email || !payload.email_verified) {
+        throw new ApiError(401, "Invalid Google account");
+    }
+
+    const { email, sub } = payload;
+
+    let user = await prisma.user.findFirst({
+        where: {
+            OR: [
+                { email },
+                { googleId: sub }
+            ]
+        }
+    });
+
+    if (!user) {
+        user = await prisma.user.create({
+            data: {
+                email,
+                googleId: sub
+            }
+        });
+    }
+    else if (!user.googleId) {
+        user = await prisma.user.update({
+            where: { id: user.id },
+            data: { googleId: sub }
+        });
+    }
+
+    const { accessToken, refreshToken } = await generateRefreshAndAccessToken(user.id);
+
+    await prisma.user.update({
+        where: { id: user.id },
+        data: { refreshToken }
+    });
+
+    const sameSite: "none" | "lax" = env.NODE_ENV === "production" ? "none" : "lax";
+
+    const accessTokenOptions = {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite,
+        maxAge: 24 * 60 * 60 * 1000 
+    }
+
+    const refreshTokenOptions = {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite,
+        maxAge: 10 * 24 * 60 * 60 * 1000 
+    }
+
+    return res
+    .status(201)
+    .cookie("accessToken", accessToken, accessTokenOptions)
+    .cookie("refreshToken", refreshToken, refreshTokenOptions)
+    .json(
+        new ApiResponse(201,
+            {
+                id: user.id, email: user.email
+            },
+            "User logged in successfully"
+        ) 
+    )
+});
 
 const generateRefreshAndAccessToken = (userId: string) => {
     const accessToken = jwt.sign(
@@ -104,6 +188,10 @@ const loginUser = asyncHandler(async (req, res) => {
 
     if(!user) {
         throw new ApiError(404, "User not found");
+    }
+
+    if (!user.password) {
+        throw new ApiError(400, "Please login using Google");
     }
 
     const isPasswordValid = await bcrypt.compare(password, user.password);
@@ -239,6 +327,10 @@ const changePassword = asyncHandler(async (req, res) => {
         throw new ApiError(400, "Current and new passwords are required");
     }
 
+    if(!req.user.password) {
+        throw new ApiError(400, "Password change not allowed for Google accounts");
+    }
+
     const isPasswordValid = await bcrypt.compare(currentPassword, req.user.password);
 
     if(!isPasswordValid) {
@@ -270,6 +362,7 @@ const deleteUser = asyncHandler(async (req, res) => {
 });
 
 export {
+    googleLogin,
     registerUser, 
     loginUser, 
     logoutUser, 

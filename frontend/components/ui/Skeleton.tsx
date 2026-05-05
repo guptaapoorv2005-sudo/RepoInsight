@@ -5,5 +5,12 @@ type SkeletonProps = {
 };
 
 export function Skeleton({ className }: SkeletonProps) {
-  return <div className={cn("animate-pulse rounded-lg bg-surface-muted", className)} />;
+  return (
+    <div
+      className={cn(
+        "animate-pulse rounded-xl bg-surface-muted/70 transition-all duration-200",
+        className
+      )}
+    />
+  );
 }

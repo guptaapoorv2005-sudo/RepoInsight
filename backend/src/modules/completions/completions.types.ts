@@ -1,5 +1,6 @@
 export type GenerateCompletionInput = {
-  repositoryId: string;
+  userId: string;
+  chatId: string;
   question: string;
   topK?: number;
   temperature?: number;
@@ -16,6 +17,7 @@ export type CompletionCitation = {
 
 export type GenerateCompletionResult = {
   repositoryId: string;
+  chatId: string;
   question: string;
   topK: number;
   model: string;

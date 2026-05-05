@@ -6,7 +6,7 @@ export function useAutoScroll<T extends HTMLElement>(deps: unknown[]) {
   useEffect(() => {
     const element = ref.current;
     if (!element) return;
-    element.scrollTop = element.scrollHeight;
+    element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
   }, deps);
 
   return ref;

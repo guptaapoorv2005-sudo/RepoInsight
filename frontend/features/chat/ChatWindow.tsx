@@ -8,11 +8,11 @@ import { MessageInput } from "@/features/chat/MessageInput";
 import { useAutoScroll } from "@/lib/hooks/useAutoScroll";
 import { Spinner } from "@/components/ui/Spinner";
 
-const placeholderMessage: Message = {
-  id: "pending-assistant",
+const typingMessage: Message = {
+  id: "typing-indicator",
   chatId: "pending",
   role: "assistant",
-  content: "Thinking...",
+  content: "",
   createdAt: new Date().toISOString()
 };
 
@@ -35,7 +35,7 @@ export function ChatWindow({ chat, locked }: ChatWindowProps) {
     if (!chat) return [];
     const list = [...messages];
     if (pendingUserMessage) list.push(pendingUserMessage);
-    if (sendMutation.isPending) list.push(placeholderMessage);
+    if (sendMutation.isPending) list.push(typingMessage);
     return list;
   }, [chat, messages, pendingUserMessage, sendMutation.isPending]);
 
@@ -62,10 +62,10 @@ export function ChatWindow({ chat, locked }: ChatWindowProps) {
 
   if (!chat) {
     return (
-      <div className="flex flex-1 items-center justify-center px-8">
+      <div className="flex flex-1 items-center justify-center p-4">
         <div className="max-w-md text-center">
-          <p className="text-lg font-semibold text-ink">Select a chat to begin</p>
-          <p className="mt-2 text-sm text-muted">
+          <p className="text-base font-medium text-ink">Select a chat to begin</p>
+          <p className="mt-3 text-sm text-muted">
             Choose a conversation on the left or start a new repository ingestion.
           </p>
         </div>
@@ -74,34 +74,36 @@ export function ChatWindow({ chat, locked }: ChatWindowProps) {
   }
 
   return (
-    <div className="flex h-full flex-col bg-surface-muted">
-      <div ref={scrollRef} className="flex-1 overflow-y-auto">
-        <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-6 py-8">
-          {isLoading ? (
-            <div className="flex items-center gap-2 text-sm text-muted">
-              <Spinner size="sm" className="border-accent/20 border-t-accent" />
-              Loading messages...
-            </div>
-          ) : displayedMessages.length === 0 ? (
-            <div className="rounded-3xl border border-dashed border-border bg-surface px-6 py-10 text-center text-sm text-muted">
-              Start by asking about your repository. We will respond with the most
-              relevant context we can find.
-            </div>
-          ) : (
-            displayedMessages.map((message) => (
-              <MessageBubble key={message.id} message={message} />
-            ))
-          )}
+    <div className="flex h-full w-full flex-col bg-bg">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto scroll-smooth">
+        <div className="w-full flex justify-center">
+          <div className="flex w-full max-w-3xl flex-col gap-4 p-4">
+            {isLoading ? (
+              <div className="flex items-center gap-3 text-sm text-muted">
+                <Spinner size="sm" className="border-accent/20 border-t-accent" />
+                Loading messages...
+              </div>
+            ) : displayedMessages.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-border bg-surface p-4 text-center text-sm text-muted transition-all duration-200">
+                Start by asking about your repository. We will respond with the most
+                relevant context we can find.
+              </div>
+            ) : (
+              displayedMessages.map((message) => (
+                <MessageBubble key={message.id} message={message} />
+              ))
+            )}
+          </div>
         </div>
       </div>
 
-      <div className="sticky bottom-0 border-t border-border bg-surface px-6 py-4">
+      <div className="sticky bottom-0 border-t border-border bg-bg px-52 py-3">
         <MessageInput
           value={draft}
           onChange={setDraft}
           onSend={handleSend}
           isSending={sendMutation.isPending}
-          disabled={locked}
+          disabled={locked || sendMutation.isPending}
           placeholder={
             locked
               ? "Ingest a repository to unlock chat"

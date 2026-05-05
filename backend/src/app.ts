@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
+import cookieParser from "cookie-parser";
 import { env } from "./config/env.js";
 import { prisma } from "./lib/prisma.js";
 import { ApiError } from "./utils/ApiError.js";
@@ -14,6 +15,8 @@ app.use(cors({
   credentials: true
 }));
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser());
 
 app.get("/api/v1/health", (_req, res) => {
   res.status(200).json({
@@ -43,19 +46,18 @@ app.get("/api/v1/ready", async (_req, res) => {
 
 
 // Import routes
-import retrievalRoutes from "./routes/retrieval.routes.js";
-import indexingRoutes from "./routes/indexing.routes.js";
 import ingestionRoutes from "./routes/ingestion.routes.js";
-import embeddingsRoutes from "./routes/embeddings.routes.js";
 import completionsRoutes from "./routes/completions.routes.js";
+import jobRoutes from "./routes/job.routes.js";
+import userRoutes from "./routes/user.routes.js";
+import chatRoutes from "./routes/chat.routes.js";
 
 // Use routes
-app.use("/api/v1/retrieval", retrievalRoutes);
-app.use("/api/v1/indexing", indexingRoutes);
 app.use("/api/v1/ingestion", ingestionRoutes);
-app.use("/api/v1/embeddings", embeddingsRoutes);
 app.use("/api/v1/completions", completionsRoutes);
-
+app.use("/api/v1/jobs", jobRoutes);
+app.use("/api/v1/users", userRoutes);
+app.use("/api/v1/chat", chatRoutes);
 
 app.use((req, _res, next) => {
   next(new ApiError(404, "Route not found: " + req.originalUrl));

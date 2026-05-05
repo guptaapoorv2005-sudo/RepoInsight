@@ -117,22 +117,20 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
       onMouseDown={onClose}
     >
       <div
-        className="w-full max-w-2xl rounded-2xl border border-border bg-surface p-8 shadow-xl"
+        className="w-full max-w-2xl rounded-2xl border border-border bg-surface p-4 shadow-xl transition-all duration-200"
         onMouseDown={(event) => event.stopPropagation()}
         role="dialog"
         aria-modal="true"
       >
-        <div className="flex items-start justify-between gap-6">
+        <div className="flex items-start justify-between gap-4">
           <div>
             <p className="text-xs uppercase tracking-[0.18em] text-muted">Settings</p>
-            <h2 className="mt-2 text-2xl font-semibold text-ink font-display">
-              Account preferences
-            </h2>
-            <p className="mt-2 text-sm text-muted">
+            <h2 className="mt-3 text-lg font-medium text-ink">Account preferences</h2>
+            <p className="mt-3 text-sm text-muted">
               Manage your account security and access.
             </p>
           </div>
@@ -141,20 +139,20 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
           </Button>
         </div>
 
-        <div className="mt-8 grid gap-8 lg:grid-cols-[1.2fr_0.8fr]">
+        <div className="mt-4 grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
           <form
             className="flex flex-col gap-4"
             onSubmit={changeForm.handleSubmit(handleChangePassword)}
           >
             <div>
-              <h3 className="text-sm font-semibold text-ink">Change password</h3>
-              <p className="mt-1 text-xs text-muted">
+              <h3 className="text-sm font-medium text-ink">Change password</h3>
+              <p className="mt-3 text-xs text-muted">
                 Choose a strong password you do not use elsewhere.
               </p>
             </div>
 
-            <div className="flex flex-col gap-2">
-              <label className="text-xs font-medium text-muted">Current password</label>
+            <div className="flex flex-col gap-3">
+              <label className="text-xs text-muted">Current password</label>
               <Input
                 type="password"
                 placeholder="Current password"
@@ -167,8 +165,8 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
               ) : null}
             </div>
 
-            <div className="flex flex-col gap-2">
-              <label className="text-xs font-medium text-muted">New password</label>
+            <div className="flex flex-col gap-3">
+              <label className="text-xs text-muted">New password</label>
               <Input
                 type="password"
                 placeholder="New password"
@@ -181,8 +179,8 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
               ) : null}
             </div>
 
-            <div className="flex flex-col gap-2">
-              <label className="text-xs font-medium text-muted">Confirm new password</label>
+            <div className="flex flex-col gap-3">
+              <label className="text-xs text-muted">Confirm new password</label>
               <Input
                 type="password"
                 placeholder="Confirm new password"
@@ -209,18 +207,18 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
           </form>
 
           <form
-            className="flex flex-col gap-4 rounded-2xl border border-red-500/40 bg-[#190f14] p-5"
+            className="flex flex-col gap-4 rounded-2xl border border-red-500/40 bg-surface p-4"
             onSubmit={deleteForm.handleSubmit(handleDelete)}
           >
             <div>
-              <h3 className="text-sm font-semibold text-red-700">Delete account</h3>
-              <p className="mt-1 text-xs text-red-600">
+              <h3 className="text-sm font-medium text-red-300">Delete account</h3>
+              <p className="mt-3 text-xs text-red-300">
                 This will permanently remove your data and conversations.
               </p>
             </div>
 
-            <div className="flex flex-col gap-2">
-              <label className="text-xs font-medium text-red-300">
+            <div className="flex flex-col gap-3">
+              <label className="text-xs text-red-300">
                 Type DELETE to confirm
               </label>
               <Input

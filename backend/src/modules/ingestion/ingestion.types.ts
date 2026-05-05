@@ -54,6 +54,7 @@ export type FetchAndChunkResult = {
 };
 
 export type IngestRepositoryInput = {
+  userId: string;
   repoUrl: string;
   branch?: string;
   scanMaxFiles?: number;

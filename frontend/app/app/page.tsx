@@ -151,23 +151,23 @@ export default function AppPage() {
       />
 
       <motion.main
-        className="relative flex h-screen flex-1 flex-col pl-64 bg-surface-muted"
+        className="relative flex h-screen flex-1 flex-col bg-bg pl-64"
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.2, ease: "easeOut" }}
       >
-        <header className="relative z-40 flex items-center justify-between border-b border-border bg-surface px-8 py-5">
+        <header className="relative z-40 flex items-center justify-between border-b border-border bg-surface px-4 py-3">
           <div>
             <p className="text-xs uppercase tracking-[0.18em] text-muted">
               {headerSubtitle}
             </p>
-            <h1 className="text-lg font-semibold text-ink font-display">
+            <h1 className="text-base font-medium text-ink">
               {headerTitle}
             </h1>
           </div>
           <div className="flex items-center gap-4">
             {isIndexing ? (
-              <div className="flex items-center gap-2 text-xs text-muted">
+              <div className="flex items-center gap-3 text-xs text-muted">
                 <Spinner size="sm" className="border-accent/20 border-t-accent" />
                 Indexing repository...
               </div>
@@ -186,7 +186,7 @@ export default function AppPage() {
             {showIngestion ? (
               <motion.div
                 key="ingestion"
-                className="absolute inset-0 flex items-center justify-center px-6 py-10 pointer-events-none"
+                className="pointer-events-none absolute inset-0 flex items-center justify-center p-4"
                 initial={{ opacity: 0, y: 12 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -8 }}

@@ -1,34 +1,19 @@
 import { asyncHandler } from "../../utils/AsyncHandler.js";
 import { ApiResponse } from "../../utils/ApiResponse.js";
-import { scanRepository, fetchAndChunkFiles, ingestRepositoryToDb  } from "./ingestion.service.js";
-import type { ScanRepositoryInput, FetchAndChunkInput, IngestRepositoryInput } from "./ingestion.types.js";
-
-const scanRepositoryController = asyncHandler(async (req, res) => {
-    const result = await scanRepository(req.body as ScanRepositoryInput);
-
-    return res
-    .status(200)
-    .json(new ApiResponse(200, result, "Repository scan successful"));
-});
-
-const fetchAndChunkController = asyncHandler(async (req, res) => {
-  const result = await fetchAndChunkFiles(req.body as FetchAndChunkInput);
-
-  return res
-    .status(200)
-    .json(new ApiResponse(200, result, "Files fetched and chunked successfully"));
-});
+import { ingestRepositoryToDb } from "./ingestion.service.js";
+import type { IngestRepositoryInput } from "./ingestion.types.js";
 
 const ingestRepositoryController = asyncHandler(async (req, res) => {
-  const result = await ingestRepositoryToDb(req.body as IngestRepositoryInput);
+  const input = {
+    ...(req.body as Omit<IngestRepositoryInput, "userId">),
+    userId: req.user.id
+  } as IngestRepositoryInput;
+
+  const result = await ingestRepositoryToDb(input);
 
   return res
     .status(200)
     .json(new ApiResponse(200, result, "Repository ingested and embedding jobs queued"));
 });
 
-export { 
-    scanRepositoryController, 
-    fetchAndChunkController, 
-    ingestRepositoryController 
-};
+export { ingestRepositoryController };

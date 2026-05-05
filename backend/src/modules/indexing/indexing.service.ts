@@ -8,6 +8,7 @@ export async function indexRepository(input: IndexRepositoryInput) {
   return prisma.$transaction(async (tx) => {
     const repository = await upsertRepository(
       {
+        userId: input.userId,
         owner: input.owner,
         name: input.name,
         defaultBranch: input.defaultBranch ?? null

@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/Input";
 import { Tag } from "@/components/ui/Tag";
 import { cn } from "@/lib/utils";
 import { useLogin, useSignup } from "@/features/auth/auth.hooks";
+import { GoogleAuth } from "@/features/auth/GoogleAuth";
 
 const schema = z.object({
   email: z.string().email("Enter a valid email"),
@@ -79,20 +80,20 @@ export function AuthCard() {
   };
 
   return (
-    <div className="w-full max-w-md rounded-2xl border border-border bg-surface p-8 shadow-xl">
-      <div className="flex items-center justify-between">
+    <div className="w-full max-w-md rounded-2xl border border-border bg-surface p-4 shadow-lg transition-all duration-200">
+      <div className="flex items-center justify-between gap-3">
         <Tag>RepoInsight access</Tag>
-        <div className="flex items-center gap-2 rounded-full border border-border bg-surface-muted p-1">
+        <div className="flex items-center gap-3 rounded-xl border border-border bg-surface-muted">
           {(["login", "signup"] as Mode[]).map((item) => (
             <button
               key={item}
               type="button"
               onClick={() => handleModeChange(item)}
               className={cn(
-                "rounded-full px-3 py-1 text-xs font-medium transition",
+                "rounded-lg px-3 py-2 text-xs transition-all duration-200",
                 item === mode
-                  ? "bg-surface text-ink shadow-sm"
-                  : "text-muted hover:text-ink"
+                  ? "bg-surface text-ink"
+                  : "text-muted hover:text-ink hover:bg-hover"
               )}
             >
               {item === "login" ? "Login" : "Signup"}
@@ -108,24 +109,24 @@ export function AuthCard() {
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -6 }}
           transition={{ duration: 0.2 }}
-          className="mt-6"
+          className="mt-4"
         >
-          <h2 className="text-2xl font-semibold text-ink font-display">{copy.title}</h2>
-          <p className="mt-2 text-sm text-muted">{copy.subtitle}</p>
+          <h2 className="text-lg font-medium text-ink">{copy.title}</h2>
+          <p className="mt-3 text-sm text-muted">{copy.subtitle}</p>
         </motion.div>
       </AnimatePresence>
 
-      <form className="mt-6 flex flex-col gap-4" onSubmit={handleSubmit(onSubmit)}>
-        <div className="flex flex-col gap-2">
-          <label className="text-xs font-medium text-muted">Email</label>
+      <form className="mt-4 flex flex-col gap-4" onSubmit={handleSubmit(onSubmit)}>
+        <div className="flex flex-col gap-3">
+          <label className="text-xs text-muted">Email</label>
           <Input type="email" placeholder="you@repoinsight.ai" {...register("email")} />
           {errors.email ? (
             <p className="text-xs text-red-400">{errors.email.message}</p>
           ) : null}
         </div>
 
-        <div className="flex flex-col gap-2">
-          <label className="text-xs font-medium text-muted">Password</label>
+        <div className="flex flex-col gap-3">
+          <label className="text-xs text-muted">Password</label>
           <Input type="password" placeholder="Minimum 6 characters" {...register("password")} />
           {errors.password ? (
             <p className="text-xs text-red-400">{errors.password.message}</p>
@@ -144,9 +145,7 @@ export function AuthCard() {
           <div className="h-px flex-1 bg-border" />
         </div>
 
-        <Button type="button" variant="secondary" size="lg">
-          Continue with Google
-        </Button>
+        <GoogleAuth />
       </form>
     </div>
   );
