@@ -214,6 +214,10 @@ async function generateWithGemini(input: {
 
   if (!response.ok) {
     const providerMessage = payload.error?.message ?? "Unknown Gemini error";
+    if(response.status === 503) {
+      throw new ApiError(503, "This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.");
+    }
+
     throw new ApiError(
       response.status,
       "Gemini completion request failed with status " + response.status + ": " + providerMessage
