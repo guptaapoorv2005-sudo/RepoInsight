@@ -2,7 +2,12 @@ import { forwardRef, type ButtonHTMLAttributes } from "react";
 import { cn } from "@/lib/utils";
 import { Spinner } from "@/components/ui/Spinner";
 
-type ButtonVariant = "primary" | "secondary" | "ghost";
+type ButtonVariant =
+  | "primary"
+  | "secondary"
+  | "ghost"
+  | "lovable"
+  | "lovable-outline";
 
 type ButtonSize = "sm" | "md" | "lg";
 
@@ -20,7 +25,11 @@ const variantStyles: Record<ButtonVariant, string> = {
     "bg-accent text-white border border-accent/60 hover:bg-accent/90 shadow-[0_14px_32px_-26px_rgba(15,17,21,0.7)]",
   secondary:
     "bg-surface text-ink border-border hover:border-accent/40 hover:bg-hover",
-  ghost: "bg-transparent text-muted hover:text-ink hover:bg-hover"
+  ghost: "bg-transparent text-muted hover:text-ink hover:bg-hover",
+  lovable:
+    "rounded-xl bg-gradient-brand px-4 py-2.5 text-sm font-medium text-brand-foreground shadow-soft transition-all hover:shadow-glow",
+  "lovable-outline":
+    "rounded-xl border border-border bg-surface-1 px-4 py-2.5 text-sm font-medium text-foreground transition-colors hover:bg-surface-2"
 };
 
 const sizeStyles: Record<ButtonSize, string> = {
@@ -45,7 +54,12 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
     return (
       <button
         ref={ref}
-        className={cn(baseStyles, variantStyles[variant], sizeStyles[size], className)}
+        className={cn(
+          baseStyles,
+          variantStyles[variant],
+          variant.startsWith("lovable") ? "" : sizeStyles[size],
+          className
+        )}
         disabled={disabled || isLoading}
         {...props}
       >

@@ -2,17 +2,19 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AnimatePresence, motion } from "framer-motion";
+import { motion } from "framer-motion";
 import { ChatSidebar } from "@/features/chat/ChatSidebar";
-import { ChatWindow } from "@/features/chat/ChatWindow";
-import { IngestionCard } from "@/features/repository/IngestionCard";
-import { useChats, useCreateChat, useDeleteChat } from "@/features/chat/chat.hooks";
+import { ChatInput } from "@/features/chat/ChatInput";
+import { MessageList } from "@/features/chat/MessageList";
+import { NewChatModal } from "@/features/chat/NewChatModal";
+import { useChats, useCreateChat, useDeleteChat, useMessages, useSendMessage } from "@/features/chat/chat.hooks";
 import { useIngestRepository } from "@/features/repository/repository.hooks";
 import { useJobProgress } from "@/features/repository/useJobProgress";
 import { useCurrentUser, useLogout } from "@/features/auth/auth.hooks";
-import { UserMenu } from "@/features/auth/UserMenu";
 import { SettingsModal } from "@/features/auth/SettingsModal";
-import { Spinner } from "@/components/ui/Spinner";
+import { Topbar } from "@/components/layout/Topbar";
+import type { Message } from "@/types/chat";
+import type { IngestRepositoryResult } from "@/types/ingestion";
 
 export default function AppPage() {
   const router = useRouter();
@@ -25,12 +27,13 @@ export default function AppPage() {
   const logout = useLogout();
 
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
-  const [isNewChat, setIsNewChat] = useState(true);
+  const [newOpen, setNewOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [ingestionState, setIngestionState] = useState<{
     jobIds: string[];
     totalChunks: number | null;
   } | null>(null);
+  const [pendingUserMessage, setPendingUserMessage] = useState<Message | null>(null);
 
   const chats = chatData?.chats ?? [];
   const activeChat = useMemo(
@@ -44,11 +47,14 @@ export default function AppPage() {
   );
 
   const repoReady = ingestionState
-    ? progress.allCompleted && !progress.anyFailed
+    ? progress.completed && !progress.failed
     : Boolean(activeChatId);
 
-  const showIngestion = isNewChat || (ingestionState && !progress.allCompleted);
-  const isIndexing = Boolean(ingestionState) && !progress.allCompleted && !progress.anyFailed;
+  const showIngestion = Boolean(ingestionState) && !progress.completed && !progress.failed;
+
+  const { data: messagesData } = useMessages(activeChatId);
+  const messages = messagesData?.messages ?? [];
+  const sendMutation = useSendMessage(activeChatId ?? "");
 
   useEffect(() => {
     if (userError?.statusCode === 401) {
@@ -63,15 +69,11 @@ export default function AppPage() {
   }, [user, userLoading, router]);
 
   const handleNewChat = () => {
-    setIsNewChat(true);
-    setActiveChatId(null);
-    setIngestionState(null);
+    setNewOpen(true);
   };
 
   const handleSelectChat = (chatId: string) => {
-    setIsNewChat(false);
     setActiveChatId(chatId);
-    setIngestionState(null);
   };
 
   const handleDeleteChat = async (chatId: string) => {
@@ -82,14 +84,13 @@ export default function AppPage() {
       await deleteChat.mutateAsync({ chatId });
       if (activeChatId === chatId) {
         setActiveChatId(null);
-        setIsNewChat(true);
       }
     } catch {
       // errors handled via mutation state
     }
   };
 
-  const handleCreateChat = async (values: { repoUrl: string; title?: string }) => {
+  const handleCreateChat = async (values: { repoUrl: string; title?: string }): Promise<IngestRepositoryResult> => {
     try {
       setIngestionState(null);
       const ingestResult = await ingestRepo.mutateAsync({
@@ -100,6 +101,7 @@ export default function AppPage() {
         jobIds: ingestResult.persistence.embeddingJobIds,
         totalChunks: ingestResult.chunking.totalChunks
       });
+      setNewOpen(false);
 
       const chat = await createChat.mutateAsync({
         repositoryId: ingestResult.persistence.repositoryId,
@@ -107,9 +109,10 @@ export default function AppPage() {
       });
 
       setActiveChatId(chat.id);
-      setIsNewChat(false);
-    } catch {
-      // errors handled via mutation state
+      return ingestResult;
+    } catch (error) {
+      // Rethrow so NewChatModal can handle the error
+      throw error;
     }
   };
 
@@ -121,15 +124,74 @@ export default function AppPage() {
     }
   };
 
-  const headerTitle = showIngestion
-    ? "Repository ingestion"
-    : activeChat?.title?.trim() || "Untitled chat";
+  useEffect(() => {
+    if (chatsLoading || chats.length > 0) return;
+    const timeout = setTimeout(() => setNewOpen(true), 300);
+    return () => clearTimeout(timeout);
+  }, [chatsLoading, chats.length]);
 
-  const headerSubtitle = showIngestion ? "Repository setup" : "Chat";
+  useEffect(() => {
+    if (!activeChatId && chats.length > 0) setActiveChatId(chats[0].id);
+  }, [chats, activeChatId]);
+
+  useEffect(() => {
+    if (!ingestionState) return;
+
+    if (progress.completed && !progress.failed) {
+      setIngestionState(null);
+    }
+  }, [progress.completed, progress.failed]);
+
+  const displayedMessages = useMemo(() => {
+    if (!activeChatId) return [];
+    const list = [...messages];
+    if (pendingUserMessage) list.push(pendingUserMessage);
+    return list;
+  }, [activeChatId, messages, pendingUserMessage]);
+
+  const handleSend = async (value: string) => {
+    if (!activeChatId || !repoReady || sendMutation.isPending) return;
+
+    setPendingUserMessage({
+      id: "pending-user-" + Date.now(),
+      chatId: activeChatId,
+      role: "user",
+      content: value,
+      createdAt: new Date().toISOString()
+    });
+
+    try {
+      await sendMutation.mutateAsync({ question: value });
+    } finally {
+      setPendingUserMessage(null);
+    }
+  };
+
+  const progressEvent = ingestionState
+    ? {
+        stage: progress.anyFailed
+          ? "error"
+          : progress.allCompleted
+            ? "complete"
+            : progress.indeterminate
+              ? "preparing"
+              : "indexing",
+        progress: progress.total
+          ? Math.min(100, Math.round((progress.processed / progress.total) * 100))
+          : 0,
+        message: progress.anyFailed
+          ? "Ingestion failed."
+          : progress.allCompleted
+            ? "Repository indexed."
+            : progress.indeterminate
+              ? "Preparing repository..."
+              : "Indexing repository..."
+      }
+    : null;
 
   if (userLoading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-bg text-sm text-muted">
+      <div className="grid min-h-screen place-items-center bg-aurora">
         Loading workspace...
       </div>
     );
@@ -140,7 +202,7 @@ export default function AppPage() {
   }
 
   return (
-    <div className="flex h-screen bg-bg">
+    <div className="flex h-screen w-full overflow-hidden bg-background">
       <ChatSidebar
         chats={chats}
         activeChatId={activeChatId}
@@ -151,83 +213,81 @@ export default function AppPage() {
       />
 
       <motion.main
-        className="relative flex h-screen flex-1 flex-col bg-bg pl-64"
-        initial={{ opacity: 0, y: 8 }}
+        className="relative flex h-screen min-w-0 flex-1 flex-col bg-aurora"
+        initial={{ opacity: 0, y: 4 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.2, ease: "easeOut" }}
+        transition={{ duration: 0.25, ease: [0.32, 0.72, 0.24, 1] }}
       >
-        <header className="relative z-40 flex items-center justify-between border-b border-border bg-surface px-4 py-3">
-          <div>
-            <p className="text-xs uppercase tracking-[0.18em] text-muted">
-              {headerSubtitle}
-            </p>
-            <h1 className="text-base font-medium text-ink">
-              {headerTitle}
-            </h1>
-          </div>
-          <div className="flex items-center gap-4">
-            {isIndexing ? (
-              <div className="flex items-center gap-3 text-xs text-muted">
-                <Spinner size="sm" className="border-accent/20 border-t-accent" />
-                Indexing repository...
-              </div>
-            ) : null}
-            <UserMenu
-              user={user}
-              onOpenSettings={() => setSettingsOpen(true)}
-              onLogout={handleLogout}
-              isLoggingOut={logout.isPending}
-            />
-          </div>
-        </header>
-
-        <div className="relative flex min-h-0 flex-1">
-          <AnimatePresence mode="wait">
-            {showIngestion ? (
-              <motion.div
-                key="ingestion"
-                className="pointer-events-none absolute inset-0 flex items-center justify-center p-4"
-                initial={{ opacity: 0, y: 12 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -8 }}
-                transition={{ duration: 0.2, ease: "easeOut" }}
-              >
-                <IngestionCard
-                  onSubmit={handleCreateChat}
-                  isSubmitting={ingestRepo.isPending || createChat.isPending}
-                  error={ingestRepo.error?.message ?? createChat.error?.message}
-                  progress={
-                    ingestionState
-                      ? {
-                          processed: progress.processed,
-                          remaining: progress.remaining,
-                          total: progress.total,
-                          indeterminate: progress.indeterminate,
-                          failed: progress.anyFailed
-                        }
-                      : null
-                  }
-                />
-              </motion.div>
-            ) : (
-              <motion.div
-                key="chat"
-                className="flex min-h-0 flex-1"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.2 }}
-              >
-                <ChatWindow chat={activeChat} locked={!repoReady} />
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
-
-        <SettingsModal
-          open={settingsOpen}
-          onClose={() => setSettingsOpen(false)}
+        <Topbar
+          onOpenSettings={() => setSettingsOpen(true)}
+          title={activeChat?.title?.trim() || "New conversation"}
+          user={user}
+          onLogout={handleLogout}
         />
+
+        <div className="relative flex min-h-0 flex-1 flex-col">
+          <div className="relative flex min-h-0 flex-1 flex-col">
+            <MessageList
+              messages={displayedMessages}
+              pending={sendMutation.isPending}
+              emptyTitle={
+                activeChat
+                  ? `Chatting with ${activeChat.title?.trim() || "this repository"}`
+                  : "Start a new conversation"
+              }
+              emptySubtitle={
+                activeChat
+                  ? "Ask anything about this repository — architecture, files, functions, flows."
+                  : "Create a new chat from a repo URL to begin."
+              }
+            />
+
+            {!activeChat ? (
+              <div className="px-6 pb-8">
+                <button
+                  onClick={() => setNewOpen(true)}
+                  className="mx-auto block rounded-xl bg-gradient-brand px-5 py-2.5 text-sm font-medium text-brand-foreground shadow-glow transition-transform hover:-translate-y-0.5"
+                >
+                  + New chat
+                </button>
+              </div>
+            ) : (
+              <ChatInput
+                disabled={!repoReady || sendMutation.isPending}
+                placeholder={
+                  !repoReady
+                    ? "Ingestion in progress…"
+                    : "Ask anything about the repository…"
+                }
+                onSend={handleSend}
+              />
+            )}
+          </div>
+
+          <NewChatModal
+            open={newOpen || showIngestion}
+            onClose={() => {
+              setNewOpen(false);
+              setIngestionState(null);
+            }}
+            onSubmit={handleCreateChat}
+            isSubmitting={ingestRepo.isPending || createChat.isPending}
+            error={ingestRepo.error?.message}
+            progress={
+              ingestionState
+                ? {
+                    processed: progress.processed,
+                    remaining: progress.remaining,
+                    total: progress.total,
+                    indeterminate: progress.indeterminate,
+                    failed: progress.failed,
+                    completed: progress.completed
+                  }
+                : null
+            }
+          />
+          <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+        </div>
       </motion.main>
     </div>
   );

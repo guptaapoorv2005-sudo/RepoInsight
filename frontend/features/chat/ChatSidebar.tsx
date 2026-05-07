@@ -1,7 +1,15 @@
-import { Trash2 } from "lucide-react";
+"use client";
+
+import { AnimatePresence, motion } from "framer-motion";
+import {
+  MessageSquare,
+  Plus,
+  Trash2,
+} from "lucide-react";
+
+import { BrandMark } from "@/components/layout/BrandMark";
 import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/Button";
-import { Skeleton } from "@/components/ui/Skeleton";
+
 import type { Chat } from "@/types/chat";
 
 type ChatSidebarProps = {
@@ -16,85 +24,173 @@ type ChatSidebarProps = {
 export function ChatSidebar({
   chats,
   activeChatId,
-  isLoading,
   onNewChat,
   onSelectChat,
-  onDeleteChat
+  onDeleteChat,
 }: ChatSidebarProps) {
   return (
-    <aside className="fixed left-0 top-0 z-30 flex h-screen w-64 flex-col border-r border-border bg-sidebar">
-      <div className="flex items-center justify-between p-4">
-        <div className="text-sm font-medium text-ink">RepoInsight</div>
-        <Button variant="secondary" size="sm" onClick={onNewChat}>
+    <aside className="relative flex h-screen w-[290px] shrink-0 flex-col overflow-hidden border-r border-white/[0.06] bg-[#071018]/80 backdrop-blur-2xl">
+
+      {/* glow */}
+      <div className="absolute left-[-120px] top-[-120px] h-[260px] w-[260px] rounded-full bg-[#22c55e]/10 blur-[120px]" />
+
+      <div className="relative z-10 flex h-16 items-center px-6">
+        <BrandMark />
+      </div>
+
+      {/* button */}
+      <div className="relative z-10 px-4">
+
+        <motion.button
+          whileHover={{
+            scale: 1.01,
+            y: -1,
+          }}
+          whileTap={{
+            scale: 0.985,
+          }}
+          onClick={onNewChat}
+          className="group flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-[#84d44b] text-sm font-semibold text-black shadow-[0_0_30px_rgba(132,212,75,0.18)] transition-all hover:brightness-110"
+        >
+          <Plus className="h-4 w-4" />
+
           New Chat
-        </Button>
+        </motion.button>
       </div>
 
-      <div className="px-4 py-2 text-xs uppercase tracking-[0.18em] text-muted">
-        Conversations
+      {/* recent */}
+      <div className="relative z-10 mt-8 px-5 text-[11px] font-medium uppercase tracking-[0.22em] text-zinc-500">
+        Recent Chats
       </div>
 
-      <div className="flex flex-1 flex-col gap-3 overflow-y-auto p-4">
-        {isLoading ? (
-          <div className="flex flex-col gap-3">
-            <Skeleton className="h-12" />
-            <Skeleton className="h-12" />
-            <Skeleton className="h-12" />
-          </div>
-        ) : chats.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-border bg-surface px-4 py-3 text-sm text-muted">
-            No chats yet. Start one from the right panel.
-          </div>
-        ) : (
-          chats.map((chat) => {
-            const isActive = chat.id === activeChatId;
-            return (
-              <div
-                key={chat.id}
-                onClick={() => onSelectChat(chat.id)}
-                role="button"
-                tabIndex={0}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    onSelectChat(chat.id);
-                  }
-                }}
-                className={cn(
-                  "group relative flex flex-col gap-3 rounded-xl border px-3 py-2 text-left text-sm transition-all duration-200",
-                  isActive
-                    ? "border-accent/60 bg-accent/15 text-ink"
-                    : "border-border bg-surface hover:border-accent/30 hover:bg-hover"
-                )}
-              >
-                <span className="text-sm text-ink">
-                  {chat.title?.trim() || "Untitled chat"}
-                </span>
-                <span className="text-xs text-muted">
-                  Last updated {new Date(chat.updatedAt).toLocaleDateString()}
-                </span>
-                <button
-                  type="button"
-                  className="absolute right-3 top-3 inline-flex h-7 w-7 items-center justify-center rounded-lg text-red-300/0 transition-all duration-200 hover:bg-red-500/10 hover:text-red-300 group-hover:text-red-300/80"
-                  aria-label="Delete chat"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onDeleteChat(chat.id);
+      {/* chats */}
+      <nav className="scrollbar-thin relative z-10 mt-3 flex-1 space-y-2 overflow-y-auto px-3 pb-5">
+
+        <AnimatePresence initial={false}>
+
+          {chats.length === 0 ? (
+            <motion.div
+              key="empty"
+              initial={{
+                opacity: 0,
+              }}
+              animate={{
+                opacity: 1,
+              }}
+              className="px-3 py-10 text-center text-sm text-zinc-500"
+            >
+              No chats yet
+            </motion.div>
+          ) : (
+            chats.map((chat) => {
+              const active =
+                chat.id === activeChatId;
+
+              return (
+                <motion.div
+                  key={chat.id}
+                  layout
+                  initial={{
+                    opacity: 0,
+                    x: -10,
                   }}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" || event.key === " ") {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      onDeleteChat(chat.id);
-                    }
+                  animate={{
+                    opacity: 1,
+                    x: 0,
                   }}
+                  exit={{
+                    opacity: 0,
+                    x: -10,
+                  }}
+                  transition={{
+                    duration: 0.2,
+                  }}
+                  className={cn(
+                    "group relative overflow-hidden rounded-2xl border transition-all duration-200",
+                    active
+                      ? "border-[#84d44b]/20 bg-white/[0.06] shadow-[0_0_30px_rgba(132,212,75,0.08)]"
+                      : "border-transparent bg-white/[0.03] hover:bg-white/[0.05]"
+                  )}
                 >
-                  <Trash2 className="h-4 w-4" aria-hidden="true" />
-                </button>
-              </div>
-            );
-          })
-        )}
+
+                  {active && (
+                    <motion.div
+                      layoutId="active-chat"
+                      className="absolute inset-y-2 left-0 w-1 rounded-r-full bg-[#84d44b]"
+                    />
+                  )}
+
+                  <div className="flex items-center gap-3 px-4 py-3">
+
+                    <button
+                      onClick={() =>
+                        onSelectChat(chat.id)
+                      }
+                      className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                    >
+                      <div
+                        className={cn(
+                          "flex h-9 w-9 shrink-0 items-center justify-center rounded-xl",
+                          active
+                            ? "bg-[#84d44b]/15 text-[#84d44b]"
+                            : "bg-white/[0.04] text-zinc-400"
+                        )}
+                      >
+                        <MessageSquare className="h-4 w-4" />
+                      </div>
+
+                      <div className="min-w-0">
+                        <p
+                          className={cn(
+                            "truncate text-sm font-medium",
+                            active
+                              ? "text-white"
+                              : "text-zinc-300"
+                          )}
+                        >
+                          {chat.title?.trim() ||
+                            "Untitled Chat"}
+                        </p>
+
+                        <p className="mt-0.5 text-xs text-zinc-500">
+                          Repository discussion
+                        </p>
+                      </div>
+                    </button>
+
+                    <button
+                      onClick={(event) => {
+                        event.stopPropagation();
+
+                        onDeleteChat(chat.id);
+                      }}
+                      className="opacity-0 transition-all group-hover:opacity-100"
+                    >
+                      <div className="flex h-8 w-8 items-center justify-center rounded-lg text-zinc-500 transition hover:bg-red-500/10 hover:text-red-400">
+                        <Trash2 className="h-4 w-4" />
+                      </div>
+                    </button>
+                  </div>
+                </motion.div>
+              );
+            })
+          )}
+        </AnimatePresence>
+      </nav>
+
+      {/* footer */}
+      <div className="relative z-10 border-t border-white/[0.06] p-4">
+
+        <div className="rounded-2xl bg-white/[0.03] px-4 py-3">
+
+          <p className="text-sm font-medium text-white">
+            RepoInsight AI
+          </p>
+
+          <p className="mt-1 text-xs leading-5 text-zinc-500">
+            Analyze repositories with semantic AI conversations.
+          </p>
+        </div>
       </div>
     </aside>
   );

@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { LogOut, Settings, User as UserIcon } from "lucide-react";
 import type { User } from "@/types/auth";
-import { cn } from "@/lib/utils";
 
 type UserMenuProps = {
   user: User;
@@ -13,7 +14,7 @@ type UserMenuProps = {
 
 function getInitials(email: string) {
   const name = email.split("@")[0] || email;
-  return name.slice(0, 2).toUpperCase();
+  return name.slice(0, 1).toUpperCase();
 }
 
 export function UserMenu({
@@ -50,50 +51,64 @@ export function UserMenu({
   }, []);
 
   return (
-    <div ref={ref} className="relative z-40">
+    <div ref={ref} className="relative">
       <button
         type="button"
         onClick={() => setOpen((prev) => !prev)}
-        className="flex items-center gap-3 rounded-xl border border-border bg-surface px-3 py-2 text-sm text-ink transition-all duration-200 hover:border-accent/40 hover:bg-hover active:scale-95"
+        className="grid h-9 w-9 place-items-center rounded-full bg-gradient-brand text-sm font-semibold text-brand-foreground shadow-soft ring-1 ring-white/10 transition-transform hover:scale-105"
         aria-expanded={open}
         aria-label="Open account menu"
       >
-        <span className="flex h-9 w-9 items-center justify-center rounded-full bg-accent/15 text-xs text-accent">
-          {initials}
-        </span>
+        {initials}
       </button>
 
-      <div
-        className={cn(
-          "pointer-events-auto absolute right-0 mt-3 w-52 origin-top-right rounded-2xl border border-border/70 bg-surface/95 p-4 shadow-lg backdrop-blur transition-all duration-200",
-          open ? "scale-100 opacity-100" : "pointer-events-none scale-95 opacity-0"
-        )}
-        style={{ zIndex: 60 }}
-      >
-        <div className="px-3 py-2 text-xs text-muted">Account</div>
-        <div className="my-3 h-px bg-border" />
-        <button
-          type="button"
-          onClick={() => {
-            setOpen(false);
-            onOpenSettings();
-          }}
-          className="w-full rounded-xl px-3 py-2 text-left text-sm text-ink transition-all duration-200 hover:bg-hover"
-        >
-          Settings
-        </button>
-        <button
-          type="button"
-          onClick={() => {
-            setOpen(false);
-            onLogout();
-          }}
-          disabled={isLoggingOut}
-          className="w-full rounded-xl px-3 py-2 text-left text-sm text-red-300 transition-all duration-200 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {isLoggingOut ? "Signing out..." : "Logout"}
-        </button>
-      </div>
+      <AnimatePresence>
+        {open ? (
+          <motion.div
+            initial={{ opacity: 0, y: -6, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -6, scale: 0.96 }}
+            transition={{ duration: 0.16, ease: [0.32, 0.72, 0.24, 1] }}
+            className="absolute right-0 mt-2 w-56 overflow-hidden rounded-xl glass-strong p-1.5 shadow-elevated"
+          >
+            <div className="px-3 py-2">
+              <div className="flex items-center gap-2">
+                <UserIcon className="h-3.5 w-3.5 text-muted-foreground" />
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-medium text-foreground">
+                    {user.email.split("@")[0]}
+                  </div>
+                  <div className="truncate text-xs text-muted-foreground">
+                    {user.email}
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="my-1 h-px bg-border" />
+            <button
+              onClick={() => {
+                setOpen(false);
+                onOpenSettings();
+              }}
+              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-foreground transition-colors hover:bg-surface-2"
+            >
+              <Settings className="h-4 w-4" />
+              Settings
+            </button>
+            <button
+              onClick={() => {
+                setOpen(false);
+                onLogout();
+              }}
+              disabled={isLoggingOut}
+              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-foreground transition-colors hover:bg-destructive/15 hover:text-destructive disabled:opacity-60"
+            >
+              <LogOut className="h-4 w-4" />
+              {isLoggingOut ? "Logging out..." : "Log out"}
+            </button>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
     </div>
   );
 }

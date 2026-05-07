@@ -1,42 +1,19 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import { z } from "zod";
-import { zodResolver } from "@hookform/resolvers/zod";
-import { useForm } from "react-hook-form";
 import { AnimatePresence, motion } from "framer-motion";
-import { Button } from "@/components/ui/Button";
-import { Input } from "@/components/ui/Input";
-import { Tag } from "@/components/ui/Tag";
+import { Loader2, Lock, Mail } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLogin, useSignup } from "@/features/auth/auth.hooks";
-import { GoogleAuth } from "@/features/auth/GoogleAuth";
-
-const schema = z.object({
-  email: z.string().email("Enter a valid email"),
-  password: z.string().min(6, "Password must be at least 6 characters")
-});
-
-type FormValues = z.infer<typeof schema>;
+import { GoogleAuthButton } from "@/features/auth/GoogleAuthButton";
 
 type Mode = "login" | "signup";
 
-const modeCopy: Record<Mode, { title: string; subtitle: string; cta: string }> = {
-  login: {
-    title: "Welcome back",
-    subtitle: "Sign in to continue exploring your repositories.",
-    cta: "Login"
-  },
-  signup: {
-    title: "Create your account",
-    subtitle: "Start chatting with your codebase in minutes.",
-    cta: "Create account"
-  }
-};
-
-export function AuthCard() {
-  const [mode, setMode] = useState<Mode>("login");
+export function AuthCard({ initial = "login" }: { initial?: Mode }) {
+  const [mode, setMode] = useState<Mode>(initial);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const router = useRouter();
 
   const loginMutation = useLogin();
@@ -44,24 +21,10 @@ export function AuthCard() {
 
   const activeMutation = mode === "login" ? loginMutation : signupMutation;
 
-  const {
-    register,
-    handleSubmit,
-    formState: { errors }
-  } = useForm<FormValues>({
-    resolver: zodResolver(schema),
-    defaultValues: {
-      email: "",
-      password: ""
-    }
-  });
-
-  const errorMessage = useMemo(() => {
-    if (!activeMutation.error) return null;
-    return activeMutation.error.message;
-  }, [activeMutation.error]);
-
-  const copy = modeCopy[mode];
+  const errorMessage = useMemo(
+    () => activeMutation.error?.message ?? null,
+    [activeMutation.error]
+  );
 
   const handleModeChange = (nextMode: Mode) => {
     if (nextMode === mode) return;
@@ -70,9 +33,12 @@ export function AuthCard() {
     setMode(nextMode);
   };
 
-  const onSubmit = async (values: FormValues) => {
+  const onSubmit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!email.includes("@")) return;
+    if (password.length < 6) return;
     try {
-      await activeMutation.mutateAsync(values);
+      await activeMutation.mutateAsync({ email, password });
       router.push("/app");
     } catch {
       // errors are surfaced in mutation state
@@ -80,73 +46,132 @@ export function AuthCard() {
   };
 
   return (
-    <div className="w-full max-w-md rounded-2xl border border-border bg-surface p-4 shadow-lg transition-all duration-200">
-      <div className="flex items-center justify-between gap-3">
-        <Tag>RepoInsight access</Tag>
-        <div className="flex items-center gap-3 rounded-xl border border-border bg-surface-muted">
-          {(["login", "signup"] as Mode[]).map((item) => (
-            <button
-              key={item}
-              type="button"
-              onClick={() => handleModeChange(item)}
-              className={cn(
-                "rounded-lg px-3 py-2 text-xs transition-all duration-200",
-                item === mode
-                  ? "bg-surface text-ink"
-                  : "text-muted hover:text-ink hover:bg-hover"
-              )}
-            >
-              {item === "login" ? "Login" : "Signup"}
-            </button>
-          ))}
-        </div>
+    <div className="w-full max-w-md rounded-2xl glass-strong p-7 shadow-elevated">
+      <div className="mb-6">
+        <h1 className="text-2xl font-semibold tracking-tight text-foreground">
+          {mode === "login" ? "Welcome back" : "Create your account"}
+        </h1>
+        <p className="mt-1 text-sm text-muted-foreground">
+          {mode === "login"
+            ? "Sign in to continue exploring your repos."
+            : "Get started in seconds — no credit card."}
+        </p>
+      </div>
+
+      <div className="mb-5 grid grid-cols-2 gap-1 rounded-xl border border-border bg-surface-1 p-1">
+        {(["login", "signup"] as Mode[]).map((item) => (
+          <button
+            key={item}
+            type="button"
+            onClick={() => handleModeChange(item)}
+            className={cn(
+              "relative rounded-lg px-3 py-1.5 text-sm font-medium text-muted-foreground transition-colors data-[active=true]:text-foreground"
+            )}
+            data-active={mode === item}
+          >
+            {mode === item ? (
+              <motion.span
+                layoutId="auth-toggle"
+                className="absolute inset-0 rounded-lg bg-surface-3"
+                transition={{ type: "spring", stiffness: 400, damping: 32 }}
+              />
+            ) : null}
+            <span className="relative">
+              {item === "login" ? "Sign in" : "Sign up"}
+            </span>
+          </button>
+        ))}
       </div>
 
       <AnimatePresence mode="wait">
-        <motion.div
+        <motion.form
           key={mode}
-          initial={{ opacity: 0, y: 8 }}
+          initial={{ opacity: 0, y: 6 }}
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -6 }}
-          transition={{ duration: 0.2 }}
-          className="mt-4"
+          transition={{ duration: 0.18 }}
+          onSubmit={onSubmit}
+          className="space-y-3.5"
         >
-          <h2 className="text-lg font-medium text-ink">{copy.title}</h2>
-          <p className="mt-3 text-sm text-muted">{copy.subtitle}</p>
-        </motion.div>
+          <Field
+            icon={<Mail className="h-3.5 w-3.5" />}
+            label="Email"
+            type="email"
+            value={email}
+            onChange={setEmail}
+            placeholder="you@company.com"
+          />
+          <Field
+            icon={<Lock className="h-3.5 w-3.5" />}
+            label="Password"
+            type="password"
+            value={password}
+            onChange={setPassword}
+            placeholder="••••••••"
+          />
+
+          {errorMessage ? (
+            <p className="text-xs text-destructive">{errorMessage}</p>
+          ) : null}
+
+          <motion.button
+            whileTap={{ scale: 0.98 }}
+            type="submit"
+            disabled={activeMutation.isPending}
+            className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-brand px-4 py-2.5 text-sm font-medium text-brand-foreground shadow-soft transition-all hover:shadow-glow disabled:opacity-50"
+          >
+            {activeMutation.isPending ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : null}
+            {mode === "login" ? "Sign in" : "Create account"}
+          </motion.button>
+        </motion.form>
       </AnimatePresence>
 
-      <form className="mt-4 flex flex-col gap-4" onSubmit={handleSubmit(onSubmit)}>
-        <div className="flex flex-col gap-3">
-          <label className="text-xs text-muted">Email</label>
-          <Input type="email" placeholder="you@repoinsight.ai" {...register("email")} />
-          {errors.email ? (
-            <p className="text-xs text-red-400">{errors.email.message}</p>
-          ) : null}
-        </div>
+      <div className="my-5 flex items-center gap-3 text-[11px] uppercase tracking-wider text-muted-foreground">
+        <div className="h-px flex-1 bg-border" />
+        or
+        <div className="h-px flex-1 bg-border" />
+      </div>
 
-        <div className="flex flex-col gap-3">
-          <label className="text-xs text-muted">Password</label>
-          <Input type="password" placeholder="Minimum 6 characters" {...register("password")} />
-          {errors.password ? (
-            <p className="text-xs text-red-400">{errors.password.message}</p>
-          ) : null}
-        </div>
-
-        {errorMessage ? <p className="text-sm text-red-400">{errorMessage}</p> : null}
-
-        <Button type="submit" size="lg" isLoading={activeMutation.isPending}>
-          {copy.cta}
-        </Button>
-
-        <div className="flex items-center gap-3 text-xs text-muted">
-          <div className="h-px flex-1 bg-border" />
-          or
-          <div className="h-px flex-1 bg-border" />
-        </div>
-
-        <GoogleAuth />
-      </form>
+      <GoogleAuthButton
+        disabled={activeMutation.isPending}
+        onSuccess={() => router.push("/app")}
+      />
     </div>
+  );
+}
+
+function Field({
+  label,
+  value,
+  onChange,
+  placeholder,
+  icon,
+  type = "text"
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  icon?: React.ReactNode;
+  type?: string;
+}) {
+  return (
+    <label className="block">
+      <span className="mb-1.5 block text-xs font-medium text-muted-foreground">
+        {label}
+      </span>
+      <div className="flex items-center gap-2 rounded-xl border border-border bg-surface-1 px-3 py-2.5 transition-colors focus-within:border-(--lovable-brand) focus-within:ring-2 focus-within:ring-(--lovable-ring)">
+        {icon ? <span className="text-muted-foreground">{icon}</span> : null}
+        <input
+          type={type}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder={placeholder}
+          className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground/60 focus:outline-none"
+        />
+      </div>
+    </label>
   );
 }

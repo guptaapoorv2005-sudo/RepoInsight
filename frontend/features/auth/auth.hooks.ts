@@ -4,6 +4,7 @@ import {
   changePassword,
   deleteAccount,
   getCurrentUser,
+  googleLogin,
   login,
   logout,
   signup
@@ -34,6 +35,17 @@ export function useSignup() {
 
   return useMutation<User, ApiError, { email: string; password: string }>({
     mutationFn: signup,
+    onSuccess: (data) => {
+      queryClient.setQueryData(["current-user"], data);
+    }
+  });
+}
+
+export function useGoogleLogin() {
+  const queryClient = useQueryClient();
+
+  return useMutation<User, ApiError, { credential: string }>({
+    mutationFn: googleLogin,
     onSuccess: (data) => {
       queryClient.setQueryData(["current-user"], data);
     }

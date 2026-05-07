@@ -11,6 +11,10 @@ type ChangePasswordInput = {
   newPassword: string;
 };
 
+type GoogleLoginInput = {
+  credential: string;
+};
+
 export function login(input: AuthInput) {
   return apiPost<User>("/users/login", input);
 }
@@ -33,4 +37,8 @@ export function changePassword(input: ChangePasswordInput) {
 
 export function deleteAccount() {
   return apiDelete<null>("/users/delete");
+}
+
+export function googleLogin(input: GoogleLoginInput) {
+  return apiPost<User>("/users/google-login", input);
 }

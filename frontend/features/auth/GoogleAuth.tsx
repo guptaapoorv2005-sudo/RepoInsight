@@ -2,8 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useQueryClient } from "@tanstack/react-query";
-import { API_BASE_URL } from "@/lib/api/client";
+import { useGoogleLogin } from "@/features/auth/auth.hooks";
 
 const SCRIPT_ID = "google-identity-service";
 
@@ -11,6 +10,7 @@ type GoogleAuthProps = {
   autoPrompt?: boolean;
   redirectTo?: string;
   checkSession?: boolean;
+  disabled?: boolean;
 };
 
 type GoogleCredentialResponse = {
@@ -23,13 +23,17 @@ type GoogleAccounts = {
       client_id: string;
       callback: (response: GoogleCredentialResponse) => void;
       auto_select?: boolean;
+      use_fedcm_for_prompt?: boolean;
     }) => void;
     prompt: () => void;
-    renderButton: (element: HTMLElement, options: {
-      theme: "outline" | "filled_black" | "filled_blue";
-      size: "large" | "medium" | "small";
-      width: number | string;
-    }) => void;
+    renderButton: (
+      element: HTMLElement,
+      options: {
+        theme: "outline" | "filled_black" | "filled_blue";
+        size: "large" | "medium" | "small";
+        width: number;
+      }
+    ) => void;
   };
 };
 
@@ -54,111 +58,50 @@ function loadGoogleScript(): Promise<void> {
   });
 }
 
-function getUserFromResponse(payload: unknown) {
-  if (payload && typeof payload === "object" && "data" in payload) {
-    const data = (payload as { data?: unknown }).data;
-    if (data && typeof data === "object") return data;
-  }
-  return payload;
-}
-
 export function GoogleAuth({
   autoPrompt = true,
   redirectTo = "/app",
-  checkSession = true
+  checkSession = true,
+  disabled
 }: GoogleAuthProps) {
   const router = useRouter();
-  const queryClient = useQueryClient();
-  const buttonRef = useRef<HTMLDivElement | null>(null);
   const didInit = useRef(false);
-  const [isAuthenticating, setIsAuthenticating] = useState(false);
-  const [shouldInit, setShouldInit] = useState(true);
+  const accountsRef = useRef<GoogleAccounts | null>(null);
+  const buttonRef = useRef<HTMLDivElement | null>(null);
   const [initError, setInitError] = useState<string | null>(null);
-  const [isMounted, setIsMounted] = useState(false);
 
   const clientId =
     process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ??
     process.env.NEXT_APP_GOOGLE_CLIENT_ID ??
     "";
 
+  const googleLoginMutation = useGoogleLogin();
+
   const handleCredentialResponse = useCallback(
     async (response: GoogleCredentialResponse) => {
       const credential = response.credential;
       if (!credential) return;
 
-      setIsAuthenticating(true);
-
       try {
-        const res = await fetch(`${API_BASE_URL}/users/google-login`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
-          credentials: "include",
-          body: JSON.stringify({ credential })
-        });
-
-        if (!res.ok) {
-          const errorText = await res.text();
-          throw new Error(
-            `Login failed (${res.status})${errorText ? `: ${errorText}` : ""}`
-          );
-        }
-
-        const data = await res.json();
-        const user = getUserFromResponse(data);
-        queryClient.setQueryData(["current-user"], user);
+        await googleLoginMutation.mutateAsync({ credential });
         router.push(redirectTo);
-      } catch (error) {
-        console.error("Google login failed", error);
-      } finally {
-        setIsAuthenticating(false);
+      } catch {
+        // errors are handled in mutation state
       }
     },
-    [queryClient, redirectTo, router]
+    [googleLoginMutation, redirectTo, router]
   );
-
-  useEffect(() => {
-    setIsMounted(true);
-  }, []);
 
   useEffect(() => {
     if (!checkSession || typeof window === "undefined") return;
 
-    const existingUser = queryClient.getQueryData(["current-user"]);
-    if (existingUser) {
-      setShouldInit(false);
-      return;
-    }
-
-    let cancelled = false;
-
-    const checkAuth = async () => {
-      try {
-        const res = await fetch(`${API_BASE_URL}/users/current-user`, {
-          credentials: "include"
-        });
-
-        if (!res.ok) return;
-        const data = await res.json();
-        if (cancelled) return;
-        const user = getUserFromResponse(data);
-        queryClient.setQueryData(["current-user"], user);
-        setShouldInit(false);
-      } catch {
-        // ignore auth check errors
-      }
-    };
-
-    checkAuth();
-
     return () => {
-      cancelled = true;
+      // cleanup
     };
-  }, [checkSession, queryClient]);
+  }, [checkSession]);
 
   useEffect(() => {
-    if (!clientId || !shouldInit || didInit.current) return;
+    if (!clientId || didInit.current) return;
 
     let cancelled = false;
 
@@ -169,24 +112,28 @@ export function GoogleAuth({
 
         const googleWindow = window as GoogleWindow;
         const accounts = googleWindow.google?.accounts;
-        if (!accounts || !buttonRef.current) {
+        if (!accounts) {
           setInitError("Google Sign-In unavailable.");
           return;
         }
 
-        buttonRef.current.innerHTML = "";
-
         accounts.id.initialize({
           client_id: clientId,
           callback: handleCredentialResponse,
-          auto_select: true
+          auto_select: true,
+          use_fedcm_for_prompt: false
         });
 
-        accounts.id.renderButton(buttonRef.current, {
-          theme: "outline",
-          size: "large",
-          width: 300
-        });
+        accountsRef.current = accounts;
+
+        if (buttonRef.current) {
+          buttonRef.current.innerHTML = "";
+          accounts.id.renderButton(buttonRef.current, {
+            theme: "outline",
+            size: "large",
+            width: 300
+          });
+        }
 
         if (autoPrompt) {
           accounts.id.prompt();
@@ -204,22 +151,55 @@ export function GoogleAuth({
     return () => {
       cancelled = true;
     };
-  }, [autoPrompt, clientId, handleCredentialResponse, shouldInit]);
+  }, [autoPrompt, clientId, handleCredentialResponse]);
 
   return (
-    <div className="flex flex-col gap-3">
-      <div ref={buttonRef} id="googleSignInDiv" className="min-h-11 w-full" />
-      {isMounted && !clientId ? (
-        <div className="rounded-xl border border-border bg-surface px-4 py-3 text-xs text-muted">
+    <div className="flex flex-col gap-2">
+      <div
+        ref={buttonRef}
+        className={disabled || !clientId || googleLoginMutation.isPending ? "opacity-50" : undefined}
+      />
+
+      {!clientId ? (
+        <div className="rounded-xl border border-border bg-surface-1 px-4 py-3 text-xs text-muted-foreground">
           Google Sign-In needs NEXT_PUBLIC_GOOGLE_CLIENT_ID.
         </div>
       ) : null}
-      {isAuthenticating ? (
-        <p className="text-xs text-muted">Signing in with Google...</p>
+
+      {googleLoginMutation.isPending ? (
+        <p className="text-xs text-muted-foreground">Signing in with Google...</p>
       ) : null}
-      {!isAuthenticating && initError ? (
-        <p className="text-xs text-red-300">{initError}</p>
+
+      {!googleLoginMutation.isPending && initError ? (
+        <p className="text-xs text-muted-foreground">{initError}</p>
+      ) : null}
+
+      {googleLoginMutation.error ? (
+        <p className="text-xs text-destructive">{googleLoginMutation.error.message}</p>
       ) : null}
     </div>
+  );
+}
+
+function GoogleIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 48 48" aria-hidden>
+      <path
+        fill="#FFC107"
+        d="M43.6 20.5H42V20H24v8h11.3C33.7 32.6 29.3 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3 0 5.8 1.1 7.9 3l5.7-5.7C34 6 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.2-.1-2.3-.4-3.5z"
+      />
+      <path
+        fill="#FF3D00"
+        d="M6.3 14.7l6.6 4.8C14.6 16 19 13 24 13c3 0 5.8 1.1 7.9 3l5.7-5.7C34 6 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"
+      />
+      <path
+        fill="#4CAF50"
+        d="M24 44c5.1 0 9.8-1.9 13.3-5l-6.1-5.2C29.2 35.7 26.7 36.5 24 36.5c-5.3 0-9.7-3.4-11.3-8l-6.5 5C9.6 39.6 16.2 44 24 44z"
+      />
+      <path
+        fill="#1976D2"
+        d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.1-4 5.5l6.1 5.2C40.7 35.6 44 30.3 44 24c0-1.2-.1-2.3-.4-3.5z"
+      />
+    </svg>
   );
 }

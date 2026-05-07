@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
-import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { useChangePassword, useDeleteAccount } from "@/features/auth/auth.hooks";
 
@@ -50,9 +49,9 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
   });
 
   const deleteForm = useForm<DeleteValues>({
-    resolver: zodResolver(deleteSchema),
+    resolver: zodResolver(deleteSchema) as any,
     defaultValues: {
-      confirm: ""
+      confirm: "" as any
     }
   });
 
@@ -121,22 +120,26 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
       onMouseDown={onClose}
     >
       <div
-        className="w-full max-w-2xl rounded-2xl border border-border bg-surface p-4 shadow-xl transition-all duration-200"
+        className="w-full max-w-2xl rounded-2xl glass-strong p-6 shadow-elevated"
         onMouseDown={(event) => event.stopPropagation()}
         role="dialog"
         aria-modal="true"
       >
         <div className="flex items-start justify-between gap-4">
           <div>
-            <p className="text-xs uppercase tracking-[0.18em] text-muted">Settings</p>
-            <h2 className="mt-3 text-lg font-medium text-ink">Account preferences</h2>
-            <p className="mt-3 text-sm text-muted">
+            <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Settings</p>
+            <h2 className="mt-3 text-lg font-medium text-foreground">Account preferences</h2>
+            <p className="mt-3 text-sm text-muted-foreground">
               Manage your account security and access.
             </p>
           </div>
-          <Button variant="secondary" size="sm" onClick={onClose}>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg border border-border bg-surface-1 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-surface-2"
+          >
             Close
-          </Button>
+          </button>
         </div>
 
         <div className="mt-4 grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
@@ -145,17 +148,18 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
             onSubmit={changeForm.handleSubmit(handleChangePassword)}
           >
             <div>
-              <h3 className="text-sm font-medium text-ink">Change password</h3>
-              <p className="mt-3 text-xs text-muted">
+              <h3 className="text-sm font-medium text-foreground">Change password</h3>
+              <p className="mt-3 text-xs text-muted-foreground">
                 Choose a strong password you do not use elsewhere.
               </p>
             </div>
 
             <div className="flex flex-col gap-3">
-              <label className="text-xs text-muted">Current password</label>
+              <label className="text-xs text-muted-foreground">Current password</label>
               <Input
                 type="password"
                 placeholder="Current password"
+                variant="lovable"
                 {...changeForm.register("currentPassword")}
               />
               {changeForm.formState.errors.currentPassword ? (
@@ -166,10 +170,11 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
             </div>
 
             <div className="flex flex-col gap-3">
-              <label className="text-xs text-muted">New password</label>
+              <label className="text-xs text-muted-foreground">New password</label>
               <Input
                 type="password"
                 placeholder="New password"
+                variant="lovable"
                 {...changeForm.register("newPassword")}
               />
               {changeForm.formState.errors.newPassword ? (
@@ -180,10 +185,11 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
             </div>
 
             <div className="flex flex-col gap-3">
-              <label className="text-xs text-muted">Confirm new password</label>
+              <label className="text-xs text-muted-foreground">Confirm new password</label>
               <Input
                 type="password"
                 placeholder="Confirm new password"
+                variant="lovable"
                 {...changeForm.register("confirmPassword")}
               />
               {changeForm.formState.errors.confirmPassword ? (
@@ -194,20 +200,24 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
             </div>
 
             {changePassword.error ? (
-              <p className="text-sm text-red-400">{changePassword.error.message}</p>
+              <p className="text-xs text-destructive">{changePassword.error.message}</p>
             ) : null}
 
             {successMessage ? (
-              <p className="text-sm text-emerald-400">{successMessage}</p>
+              <p className="text-xs text-emerald-400">{successMessage}</p>
             ) : null}
 
-            <Button type="submit" isLoading={changePassword.isPending}>
+            <button
+              type="submit"
+              disabled={changePassword.isPending}
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-brand px-4 py-2.5 text-sm font-medium text-brand-foreground shadow-soft transition-all hover:shadow-glow disabled:opacity-50"
+            >
               Update password
-            </Button>
+            </button>
           </form>
 
           <form
-            className="flex flex-col gap-4 rounded-2xl border border-red-500/40 bg-surface p-4"
+            className="flex flex-col gap-4 rounded-2xl border border-red-500/40 bg-surface-1 p-4"
             onSubmit={deleteForm.handleSubmit(handleDelete)}
           >
             <div>
@@ -218,12 +228,11 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
             </div>
 
             <div className="flex flex-col gap-3">
-              <label className="text-xs text-red-300">
-                Type DELETE to confirm
-              </label>
+              <label className="text-xs text-red-300">Type DELETE to confirm</label>
               <Input
                 className="border-red-500/40 focus:border-red-400 focus:ring-red-400/30"
                 placeholder="DELETE"
+                variant="lovable"
                 {...deleteForm.register("confirm")}
               />
               {deleteForm.formState.errors.confirm ? (
@@ -237,14 +246,13 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
               <p className="text-xs text-red-300">{deleteAccount.error.message}</p>
             ) : null}
 
-            <Button
+            <button
               type="submit"
-              variant="secondary"
-              isLoading={deleteAccount.isPending}
-              className="border-red-500/40 text-red-300 hover:border-red-400"
+              disabled={deleteAccount.isPending}
+              className="flex w-full items-center justify-center rounded-xl border border-red-500/40 px-4 py-2.5 text-sm font-medium text-red-300 transition-colors hover:border-red-400 disabled:opacity-50"
             >
               Delete account
-            </Button>
+            </button>
           </form>
         </div>
       </div>

@@ -1,13 +1,11 @@
 "use client";
 
-import { motion } from "framer-motion";
+import type { ComponentPropsWithoutRef } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { Loader2 } from "lucide-react";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
-import { Button } from "@/components/ui/Button";
-import { Input } from "@/components/ui/Input";
-import { ProgressBar } from "@/components/ui/ProgressBar";
-import { cn } from "@/lib/utils";
 
 const schema = z.object({
   repoUrl: z.string().url("Enter a valid repository URL"),
@@ -22,6 +20,7 @@ type IngestionProgress = {
   total: number | null;
   indeterminate: boolean;
   failed: boolean;
+  completed: boolean;
 };
 
 type IngestionCardProps = {
@@ -35,6 +34,7 @@ export function IngestionCard({ onSubmit, isSubmitting, error, progress }: Inges
   const {
     register,
     handleSubmit,
+    watch,
     formState: { errors }
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -44,7 +44,7 @@ export function IngestionCard({ onSubmit, isSubmitting, error, progress }: Inges
     }
   });
 
-  const isBusy = isSubmitting || Boolean(progress && !progress.failed);
+  const isBusy = isSubmitting || Boolean(progress && !progress.failed && !progress.completed);
 
   const total = progress?.total ?? 0;
   const processed = progress?.processed ?? 0;
@@ -57,86 +57,131 @@ export function IngestionCard({ onSubmit, isSubmitting, error, progress }: Inges
       animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0, scale: 0.98 }}
       transition={{ duration: 0.25, ease: "easeOut" }}
-      className="pointer-events-auto w-full max-w-lg rounded-2xl border border-border bg-surface p-4 shadow-lg transition-all duration-200"
+      className="pointer-events-auto w-full max-w-lg rounded-2xl glass-strong p-6 shadow-elevated"
     >
-      <div className="flex flex-col gap-3">
-        <p className="text-xs uppercase tracking-[0.18em] text-muted">
+      <div className="mb-5">
+        <h2 className="text-lg font-semibold tracking-tight text-foreground">
           Start a new chat
-        </p>
-        <h2 className="text-lg font-medium text-ink">Start a new chat</h2>
-        <p className="text-sm text-muted">
-          Paste a GitHub repository URL, name the conversation, and we will build an
-          index before you can chat.
+        </h2>
+        <p className="text-xs text-muted-foreground">
+          Point at any public repository — we'll index it for you.
         </p>
       </div>
 
-      <form
-        className="mt-4 flex flex-col gap-4"
-        onSubmit={handleSubmit(onSubmit)}
-      >
-        <div className="flex flex-col gap-3">
-          <label className="text-xs text-muted">Repository URL</label>
-          <Input
-            placeholder="https://github.com/org/repo"
-            {...register("repoUrl")}
-            disabled={isBusy}
-          />
-          {errors.repoUrl ? (
-            <p className="text-xs text-red-400">{errors.repoUrl.message}</p>
-          ) : null}
-        </div>
-
-        <div className="flex flex-col gap-3">
-          <label className="text-xs text-muted">Chat title (optional)</label>
-          <Input
-            placeholder="Payments architecture review"
-            {...register("title")}
-            disabled={isBusy}
-          />
-          {errors.title ? (
-            <p className="text-xs text-red-400">{errors.title.message}</p>
-          ) : null}
-        </div>
-
-        {error ? <p className="text-sm text-red-400">{error}</p> : null}
-
-        {progress ? (
-          <div className="mt-4 flex flex-col gap-3 rounded-2xl border border-border bg-surface-muted p-4">
-            <div className="flex items-center justify-between text-xs text-muted">
-              <span className="text-ink">
-                {progress.failed
-                  ? "Embedding failed"
-                  : progress.indeterminate
-                    ? "Preparing repository"
-                    : "Indexing repository"}
-              </span>
-              {!progress.indeterminate && total > 0 ? (
-                <span>{percent}%</span>
-              ) : null}
-            </div>
-            <ProgressBar
-              value={processed}
-              max={total || 1}
-              indeterminate={progress.indeterminate}
-              className={cn(progress.failed ? "bg-red-900/40" : null)}
+      <AnimatePresence mode="wait">
+        {!progress || progress.completed || progress.failed ? (
+          <motion.form
+            key="form"
+            initial={{ opacity: 0, y: 4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+            transition={{ duration: 0.18 }}
+            onSubmit={handleSubmit(onSubmit)}
+            className="space-y-4"
+          >
+            <Field
+              label="Chat title"
+              placeholder="My weekend exploration"
+              disabled={isBusy}
+              {...register("title")}
             />
-            <div className="flex items-center justify-between text-xs text-muted">
-              <span>
-                {total > 0
-                  ? `${processed} processed · ${Math.max(remaining, 0)} remaining`
-                  : "Warming up indexing jobs"}
-              </span>
-              <span className="text-ink">
-                {progress.failed ? "Try again" : "Do not close this tab"}
-              </span>
-            </div>
-          </div>
-        ) : null}
+            <Field
+              label="Repository URL"
+              placeholder="https://github.com/owner/repo"
+              disabled={isBusy}
+              {...register("repoUrl")}
+            />
 
-        <Button type="submit" size="lg" isLoading={isSubmitting} disabled={isBusy} className="w-full">
-          {progress?.failed ? "Try Again" : isSubmitting ? "Creating chat" : "Create Chat"}
-        </Button>
-      </form>
+            {errors.repoUrl ? (
+              <p className="text-xs text-destructive">{errors.repoUrl.message}</p>
+            ) : null}
+            {errors.title ? (
+              <p className="text-xs text-destructive">{errors.title.message}</p>
+            ) : null}
+            {error ? <p className="text-xs text-destructive">{error}</p> : null}
+
+            <button
+              type="submit"
+              disabled={isBusy || !watch("repoUrl")?.trim()}
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-brand px-4 py-2.5 text-sm font-medium text-brand-foreground shadow-soft transition-all hover:shadow-glow disabled:opacity-50"
+            >
+              {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              {isSubmitting ? "Begin ingestion" : "Begin ingestion"}
+            </button>
+          </motion.form>
+        ) : (
+          <motion.div
+            key="progress"
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.22 }}
+            className="space-y-4"
+          >
+            <div className="rounded-xl border border-border bg-surface-1 p-4">
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span className="uppercase tracking-wider">
+                  {progress.failed
+                    ? "error"
+                    : progress.indeterminate
+                      ? "preparing"
+                      : "indexing"}
+                </span>
+                {!progress.indeterminate && total > 0 ? (
+                  <span className="tabular-nums">{percent}%</span>
+                ) : null}
+              </div>
+              <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-surface-3">
+                <motion.div
+                  className="h-full rounded-full bg-gradient-brand"
+                  initial={{ width: 0 }}
+                  animate={{ width: `${percent}%` }}
+                  transition={{ duration: 0.5, ease: [0.32, 0.72, 0.24, 1] }}
+                />
+              </div>
+              <AnimatePresence mode="wait">
+                <motion.p
+                  key={percent}
+                  initial={{ opacity: 0, y: 4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -4 }}
+                  transition={{ duration: 0.18 }}
+                  className="mt-3 text-sm text-foreground"
+                >
+                  {total > 0
+                    ? `${processed} processed · ${Math.max(remaining, 0)} remaining`
+                    : "Warming up indexing jobs"}
+                </motion.p>
+              </AnimatePresence>
+            </div>
+            <p className="text-center text-xs text-muted-foreground">
+              Chat will unlock automatically when ingestion completes.
+            </p>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </motion.div>
+  );
+}
+
+type FieldProps = ComponentPropsWithoutRef<"input"> & {
+  label: string;
+  icon?: React.ReactNode;
+};
+
+function Field({ label, icon, ...props }: FieldProps) {
+  return (
+    <label className="block">
+      <span className="mb-1.5 block text-xs font-medium text-muted-foreground">
+        {label}
+      </span>
+      <div className="flex items-center gap-2 rounded-xl border border-border bg-surface-1 px-3 py-2.5 transition-colors focus-within:border-(--lovable-brand) focus-within:ring-2 focus-within:ring-(--lovable-ring)">
+        {icon ? <span className="text-muted-foreground">{icon}</span> : null}
+        <input
+          className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground/60 focus:outline-none"
+          {...props}
+        />
+      </div>
+    </label>
   );
 }
