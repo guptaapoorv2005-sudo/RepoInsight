@@ -21,24 +21,24 @@ This README documents architecture, pipelines, API, environment variables, local
 
 ## Table of contents
 
-- Quick overview
-- Why RepoInsight exists
-- Features
-- Architecture (ASCII diagrams)
-- Request lifecycle
-- Example Query Flow
-- Project structure (detailed)
-- Backend overview & key files
-- Embedding & worker pipelines
-- SSE progress & job monitoring
-- Engineering Challenges
-- Developer onboarding (local dev)
-- Docker & deployment notes
-- Environment variables
-- API overview
-- Design notes
-- Roadmap
-- License
+- [Quick overview](#quick-overview)
+- [Why RepoInsight exists](#why-repoinsight-exists)
+- [Features](#features)
+- [Architecture (ASCII diagrams)](#architecture-ascii-diagrams)
+- [Request lifecycle](#request-lifecycle)
+- [Example Query Flow](#example-query-flow)
+- [Project structure (detailed)](#project-structure-detailed)
+- [Backend overview & key files](#backend-overview--key-files)
+- [Embedding & worker pipelines](#embedding--worker-pipelines)
+- [SSE progress & job monitoring](#sse-progress--job-monitoring)
+- [Engineering Challenges](#engineering-challenges)
+- [Developer onboarding (local dev)](#developer-onboarding-local-dev)
+- [Docker & deployment notes](#docker--deployment-notes)
+- [Environment variables](#environment-variables)
+- [API overview](#api-overview)
+- [Design notes (short)](#design-notes-short)
+- [Roadmap & future improvements](#roadmap--future-improvements)
+- [License](#license)
 
 ---
 
@@ -154,9 +154,9 @@ Architecture note: the worker(s) are separated from the API so heavy embedding w
 └──────────────────────┬──────────────────────┘
                        │
                        v
-┌─────────────────────────────────────────────┐
+┌──────────────────────────────────────────────┐
 │ BullMQ job: embed-repository (rag-processing)│
-└──────────────────────┬──────────────────────┘
+└──────────────────────┬───────────────────────┘
                        │
                        v
 ┌─────────────────────────────────────────────┐
@@ -192,14 +192,14 @@ Architecture note: the worker(s) are separated from the API so heavy embedding w
            v
 ┌─────────────────────────────────────────────┐
 │ Worker fetches job and updates progress     │
-└──────────┬───────────────────────────────────┘
-           │
-           v
-      ┌────┴────┐
-      │         │
-      v         v
+└───────────────────┬─────────────────────────┘
+                    │
+                    v
+      ┌─────────────┴───────────────────┐
+      │                                 │
+      v                                 v
 ┌──────────────────────┐   ┌──────────────────────────────┐
-│ Success: job done    │   │ Failure: retry with backoff   │
+│ Success: job done    │   │ Failure: retry with backoff  │
 └──────────────────────┘   └──────────┬───────────────────┘
                                       │
                                       v
