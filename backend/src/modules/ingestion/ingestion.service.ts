@@ -196,7 +196,9 @@ async function githubGetWithRetry<T>(url: string, retries = 3): Promise<T> {
 
       // exponential backoff
       // If we hit a rate limit, we can retry after some delay. GitHub's rate limit resets every hour, but we can use exponential backoff to wait longer between retries.
-      await new Promise((r) => setTimeout(r, 500 * Math.pow(2, attempt)));
+      await new Promise((resolve) => setTimeout(resolve, 500 * Math.pow(2, attempt))); // When a new promise is created, the executor function (the function passed to the Promise constructor) is called immediately. 
+      // The executor function takes two arguments: resolve and reject, which are functions that can be called to either resolve the promise with a value or reject it with a reason. 
+      // In this case, we use setTimeout to call resolve after a delay that increases exponentially with each attempt. For the first attempt, the delay is 500ms, for the second attempt it's 1s, for the third attempt it's 2s, and so on.
     }
   }
 
@@ -281,19 +283,9 @@ function scoreFile(path: string): number {
 }
 
 export async function scanRepository(input: ScanRepositoryInput): Promise<ScanRepositoryResult> {
-    if (!input.repoUrl) {
-        throw new ApiError(400, "repoUrl is required");
-    }
-    const maxFiles = input.maxFiles ?? DEFAULT_MAX_FILES;
-    const maxFileSizeBytes = input.maxFileSizeBytes ?? DEFAULT_MAX_FILE_SIZE_BYTES;
-
-    if (maxFiles <= 0) {
-        throw new ApiError(400, "maxFiles must be greater than 0");
-    }
-
-    if (maxFileSizeBytes <= 0) {
-        throw new ApiError(400, "maxFileSizeBytes must be greater than 0");
-    }
+    
+    const maxFiles = DEFAULT_MAX_FILES;
+    const maxFileSizeBytes = DEFAULT_MAX_FILE_SIZE_BYTES;
 
     const { owner, repo } = parseGitHubUrl(input.repoUrl);
 
@@ -367,7 +359,7 @@ function chunkTextByTokens(
 
   const language = EXTENSION_LANGUAGE_MAP[extensionOf(filePath)] || "unknown";
 
-  // Step 1: split by functions (code-aware)
+  // Split by functions using regex(code-aware)
   const parts = text.split(
     /(?=\bfunction\s+\w+\s*\(|\bconst\s+\w+\s*=\s*\(|\b\w+\s*=>)/g
   );
@@ -423,7 +415,7 @@ function chunkTextByTokens(
   return chunks;
 }
 
-async function fetchFileContentFromGitHub( //TODO: add caching layer to avoid refetching the same file.
+async function fetchFileContentFromGitHub(
   owner: string,
   repo: string,
   branch: string,
@@ -479,14 +471,6 @@ export async function fetchAndChunkFiles(
   const maxFilesToFetch = DEFAULT_MAX_FETCH_FILES;
   const maxFileSizeBytes = DEFAULT_MAX_FETCH_FILE_SIZE_BYTES;
 
-  if (chunkSizeTokens <= 0) {
-    throw new ApiError(400, "chunkSizeTokens must be greater than 0");
-  }
-
-  if (overlapTokens < 0 || overlapTokens >= chunkSizeTokens) {
-    throw new ApiError(400, "overlapTokens must be >= 0 and less than chunkSizeTokens");
-  }
-
   const selectedFiles = input.files.slice(0, maxFilesToFetch);
 
   const chunks: FileChunk[] = [];
@@ -495,7 +479,7 @@ export async function fetchAndChunkFiles(
   let skippedFiles = 0;
 
   const limit = pLimit(5); // safe concurrency
-// We use p-limit to control the concurrency of fetching and chunking files. This is important because if we try to fetch too many files at once, especially large ones, we might run into rate limits or memory issues. By limiting the concurrency to 5, we ensure that only 5 files are being processed at the same time, which can help balance speed and resource usage.
+// We use p-limit to control the concurrency of fetching and chunking files. This is important because if we try to fetch too many files at once, especially large ones, we might run into rate limits or memory issues.
   const tasks: Promise<FetchResult>[] = selectedFiles.map((file) =>
     limit(async () => {
       if (file.size !== null && file.size > maxFileSizeBytes) {
@@ -597,8 +581,6 @@ export async function ingestRepositoryToDb( input: IngestRepositoryInput ): Prom
   const scanResult = await scanRepository({
     repoUrl: input.repoUrl,
     branch: input.branch,
-    maxFiles: input.scanMaxFiles,
-    maxFileSizeBytes: input.scanMaxFileSizeBytes
   });
 
   const fetchResult = await fetchAndChunkFiles({
@@ -608,11 +590,7 @@ export async function ingestRepositoryToDb( input: IngestRepositoryInput ): Prom
     files: scanResult.files.map((file) => ({
       path: file.path,
       size: file.size
-    })),
-    chunkSizeTokens: input.chunkSizeTokens,
-    overlapTokens: input.overlapTokens,
-    maxFilesToFetch: input.fetchMaxFiles ?? scanResult.files.length,
-    maxFileSizeBytes: input.fetchMaxFileSizeBytes ?? input.scanMaxFileSizeBytes
+    }))
   });
 
   if (fetchResult.totalChunks === 0) {

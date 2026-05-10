@@ -1,24 +1,22 @@
 export type ScanRepositoryInput = {
-repoUrl: string;
-branch?: string;
-maxFiles?: number;
-maxFileSizeBytes?: number;
+  repoUrl: string;
+  branch?: string;
 };
 
 export type ScannedFile = {
-path: string;
-size: number | null;
-extension: string;
+  path: string;
+  size: number | null;
+  extension: string;
 };
 
 export type ScanRepositoryResult = {
-owner: string;
-repo: string;
-branch: string;
-totalFromTree: number;
-kept: number;
-skipped: number;
-files: ScannedFile[];
+  owner: string;
+  repo: string;
+  branch: string;
+  totalFromTree: number;
+  kept: number;
+  skipped: number;
+  files: ScannedFile[];
 };
 
 export type FetchAndChunkInput = {
@@ -26,10 +24,6 @@ export type FetchAndChunkInput = {
   repo: string;
   branch: string;
   files: Array<{ path: string; size: number | null }>;
-  chunkSizeTokens?: number;
-  overlapTokens?: number;
-  maxFilesToFetch?: number;
-  maxFileSizeBytes?: number;
 };
 
 export type FileChunk = {
@@ -57,12 +51,6 @@ export type IngestRepositoryInput = {
   userId: string;
   repoUrl: string;
   branch?: string;
-  scanMaxFiles?: number;
-  scanMaxFileSizeBytes?: number;
-  chunkSizeTokens?: number;
-  overlapTokens?: number;
-  fetchMaxFiles?: number;
-  fetchMaxFileSizeBytes?: number;
 };
 
 export type IngestRepositoryResult = {
