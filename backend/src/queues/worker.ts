@@ -101,6 +101,8 @@ const worker = new Worker<RagJobPayload>(
   }
 );
 
+console.log("BullMQ worker started");
+
 worker.on("completed", (job) => {
   console.log("Job completed", {
     jobId: job.id,
